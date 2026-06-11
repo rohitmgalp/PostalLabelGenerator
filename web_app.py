@@ -35,6 +35,7 @@ def save_data(data):
 
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
+    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
@@ -74,7 +75,6 @@ bg_file_path = os.path.join(BASE_DIR, "background.png")
 
 if os.path.exists(bg_file_path):
     encoded_bg = get_base64_image(bg_file_path)
-    # Inject the image as a fixed full-screen watermark backdrop with clean modern containers
     st.markdown(f"""
         <style>
             .stApp {{
@@ -83,7 +83,6 @@ if os.path.exists(bg_file_path):
                 background-position: center;
                 background-attachment: fixed;
             }}
-            /* Create crisp white layout paper cards so forms stay highly readable over the graphic */
             div[data-testid="stColumn"] {{
                 background-color: rgba(255, 255, 255, 0.92);
                 padding: 30px !important;
@@ -113,7 +112,6 @@ if os.path.exists(bg_file_path):
         </style>
     """, unsafe_allow_html=True)
 else:
-    # Clean solid fallback style definitions if background asset file is not loaded yet
     st.markdown("""
         <style>
             .stApp { background-color: #fdfbf7; }
@@ -246,8 +244,8 @@ with tabs[0]:
     with col_inputs:
         st.subheader("Shipment Properties")
         col_w_in, col_h_in = st.columns(2)
-        with col_w_in: width_in = st.number_input("Label Width (Inches)", value=4.0, step=0.5)
-        with col_h_in: height_in = st.number_input("Label Height (Inches)", value=6.0, step=0.5)
+        with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
+        with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
             
         saved_addresses = user_profile.get("addresses", [])
         selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses)
@@ -347,7 +345,6 @@ with tabs[0]:
                     W_px = int(width_in * DPI)
                     H_px = int(height_in * DPI)
                     m_px = int(W_px * 0.05)
-                    use_w = W_px - (2 * m_px)
                     
                     for idx, entry in enumerate(st.session_state.web_queue):
                         bc_buffer = io.BytesIO()
@@ -359,9 +356,9 @@ with tabs[0]:
                         draw = ImageDraw.Draw(lbl_canvas)
                         scale = min(W_px, H_px)
                         
-                        size_l = max(38, int(scale * 0.060))
-                        size_m = max(30, int(scale * 0.046))
-                        size_b = max(34, int(scale * 0.050))
+                        size_l = max(36, int(scale * 0.058))
+                        size_m = max(28, int(scale * 0.044))
+                        size_b = max(32, int(scale * 0.048))
                         
                         try:
                             f_l = ImageFont.load_default(size=size_l)
@@ -370,78 +367,58 @@ with tabs[0]:
                         except:
                             f_l = f_m = f_b = ImageFont.load_default()
                             
-                        y_curr = m_px
                         top_strings = [f"ARTICLE: {entry['article']}"]
                         if entry['cust_id']: top_strings.append(f"CUST ID: {entry['cust_id']}")
                         if entry['cod']: top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
                         
-                        for line in top_strings:
-                            draw.text((m_px, y_curr), line, fill="black", font=f_b)
-                            b_box = draw.textbbox((0,0), line, font=f_b)
-                            y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.015)
+                        # --- ASPECT DETECTOR CONTEXT LAYOUT ---
+                        if W_px >= H_px:  # LANDSCAPE MODE (2-COLUMN GRID)
+                            # Dedicate bottom 15% height strictly to barcode
+                            bc_h_scaled = int(H_px * 0.15)
+                            bc_w_scaled = int(W_px * 0.65)
+                            bc_y_pos = H_px - bc_h_scaled - m_px
                             
-                        y_curr += int(H_px * 0.02)
-                        draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
-                        y_curr += int(size_b * 1.2)
-                        
-                        w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
-                        draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=10)
-                        b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=10)
-                        y_cursor_from = b_box[3] + int(H_px * 0.04)
-                        
-                        draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
-                        y_cursor_from += int(size_b * 1.2)
-                        
-                        w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
-                        draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=10)
-                        b_box = draw.multiline_textbbox((m_px, y_cursor_from), w_to, font=f_l, spacing=10)
-                        
-                        bc_h_scaled = int(H_px * 0.12)
-                        bc_w_scaled = int(W_px * 0.75)
-                        bc_y_pos = H_px - bc_h_scaled - m_px
-                        bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
-                        lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
-                        
-                        pdf_pages.append(lbl_canvas)
-                        
-                        # --- EXCEL DATA INJECTIONS ---
-                        ws.cell(row=next_row, column=1, value=idx + 1)
-                        ws.cell(row=next_row, column=2, value=entry['tracking'])
-                        ws.cell(row=next_row, column=3, value=entry['weight'])
-                        ws.cell(row=next_row, column=5, value=entry['length'])
-                        ws.cell(row=next_row, column=6, value=entry['breadth'])
-                        ws.cell(row=next_row, column=7, value=entry['height'])
-                        
-                        c_from = entry['from'].replace('\n', ', ')
-                        ws.cell(row=next_row, column=11, value=user_profile.get('name', current_user))
-                        ws.cell(row=next_row, column=13, value=c_from[:50])
-                        ws.cell(row=next_row, column=14, value=c_from[50:100])
-                        ws.cell(row=next_row, column=37, value=entry['s_mob'])
-                        
-                        c_to = entry['to'].replace('\n', ', ')
-                        ws.cell(row=next_row, column=22, value="CUSTOMER")
-                        ws.cell(row=next_row, column=24, value=c_to[:50])
-                        ws.cell(row=next_row, column=25, value=c_to[50:100])
-                        ws.cell(row=next_row, column=38, value=entry['r_mob'])
-                        
-                        if entry['cod']:
-                            ws.cell(row=next_row, column=41, value="TRUE")
-                            ws.cell(row=next_row, column=42, value=entry['cod'])
-                        next_row += 1
-                        
-                    pdf_buffer = io.BytesIO()
-                    pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
-                    st.session_state.pdf_ready = pdf_buffer.getvalue()
-                    
-                    excel_buffer = io.BytesIO()
-                    wb.save(excel_buffer)
-                    st.session_state.excel_ready = excel_buffer.getvalue()
-                    st.success("Compilation complete! Web download links active.")
-
-            batch_timestamp = int(time.time())
-            if 'pdf_ready' in st.session_state:
-                st.download_button(label="📥 Download Consolidated Label PDF Bundle", data=st.session_state.pdf_ready, file_name=f"Compiled_Post_Labels_{batch_timestamp}.pdf", mime="application/pdf", use_container_width=True)
-            if 'excel_ready' in st.session_state:
-                st.download_button(label="📥 Download Template Upload Ready Manifest", data=st.session_state.excel_ready, file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        else:
-            st.info("The dispatch pipeline queue is currently clean.")
+                            # Split upper half into two equal boxes
+                            col_width = (W_px - (3 * m_px)) // 2
+                            
+                            # Left Column: Metadata + Sender Address
+                            y_left = m_px
+                            for line in top_strings:
+                                draw.text((m_px, y_left), line, fill="black", font=f_b)
+                                b_box = draw.textbbox((0,0), line, font=f_b)
+                                y_left += (b_box[3] - b_box[1]) + int(H_px * 0.015)
+                                
+                            y_left += int(H_px * 0.02)
+                            draw.text((m_px, y_left), "FROM:", fill="black", font=f_b)
+                            y_left += int(size_b * 1.2)
+                            
+                            w_from = wrap_text_to_pixels(entry['from'], draw, f_m, col_width)
+                            draw.multiline_text((m_px, y_left), w_from, fill="black", font=f_m, spacing=8)
+                            
+                            # Right Column: Recipient Address
+                            x_right = m_px + col_width + m_px
+                            y_right = m_px
+                            draw.text((x_right, y_right), "TO:", fill="black", font=f_b)
+                            y_right += int(size_b * 1.2)
+                            
+                            w_to = wrap_text_to_pixels(entry['to'], draw, f_l, col_width)
+                            draw.multiline_text((x_right, y_right), w_to, fill="black", font=f_l, spacing=8)
+                            
+                            # Centered base barcode placement
+                            bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
+                            lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
+                            
+                        else:  # PORTRAIT MODE (VERTICAL STACK)
+                            use_w = W_px - (2 * m_px)
+                            y_curr = m_px
+                            for line in top_strings:
+                                draw.text((m_px, y_curr), line, fill="black", font=f_b)
+                                b_box = draw.textbbox((0,0), line, font=f_b)
+                                y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.012)
+                                
+                            y_curr += int(H_px * 0.02)
+                            draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
+                            y_curr += int(size_b * 1.2)
+                            
+                            w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
+                            draw.multiline_text((m
