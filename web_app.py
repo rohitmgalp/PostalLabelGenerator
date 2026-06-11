@@ -34,15 +34,19 @@ def save_data(data):
 
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
+    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
     total_sum = sum(d * w for d, w in zip(digits, weights))
     remainder = total_sum % 11
     c = 11 - remainder
-    if c == 10: return "0"
-    elif c == 11: return "5"
-    else: return str(c)
+    if c == 10: 
+        return "0"
+    elif c == 11: 
+        return "5"
+    else: 
+        return str(c)
 
 # --- TEXT WRAPPING ENGINE ---
 def wrap_text_to_pixels(text, draw, font, max_width):
@@ -54,11 +58,14 @@ def wrap_text_to_pixels(text, draw, font, max_width):
             test_line = current_line + " " + word if current_line else word
             bbox = draw.textbbox((0, 0), test_line, font=font)
             w = bbox[2] - bbox[0]
-            if w <= max_width: current_line = test_line
+            if w <= max_width: 
+                current_line = test_line
             else:
-                if current_line: lines.append(current_line)
+                if current_line: 
+                    lines.append(current_line)
                 current_line = word
-        if current_line: lines.append(current_line)
+        if current_line: 
+            lines.append(current_line)
     return '\n'.join(lines)
 
 # --- STREAMLIT STATE INITIALIZATION ---
@@ -152,173 +159,3 @@ if current_user.lower() == "admin":
                 "User ID": uid, "Full/Company Name": info.get("name", "N/A"),
                 "Email ID": info.get("email", "N/A"), "Mobile Number": info.get("mobile", "N/A"),
                 "Saved Profiles": len(info.get("addresses", []))
-            })
-        if user_records:
-            admin_df = pd.DataFrame(user_records)
-            st.dataframe(admin_df, use_container_width=True)
-            output_admin = io.BytesIO()
-            with pd.ExcelWriter(output_admin, engine='openpyxl') as writer:
-                admin_df.to_excel(writer, index=False, sheet_name='Users')
-            st.download_button(label="📥 Export Client Directory to Excel", data=output_admin.getvalue(), file_name="Registered_Users_Directory.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# --- TAB 2: RANGE ALLOCATION SETTINGS ---
-with tabs[1]:
-    st.header("UPU S10 Barcode Range Setup")
-    set_article = st.selectbox("Choose Article Classification", ARTICLE_TYPES, key="setup_art")
-    b_data = user_profile["barcodes"][set_article]
-    
-    col_p, col_st, col_en, col_su = st.columns(4)
-    with col_p: new_prefix = st.text_input("Prefix (e.g., EK)", value=b_data["prefix"], max_chars=2).upper()
-    with col_st: new_start = st.number_input("Start Serial (8 Digits)", value=int(b_data["current"]), step=1)
-    with col_en: new_end = st.number_input("End Serial (8 Digits)", value=int(b_data["end"]), step=1)
-    with col_su: new_suffix = st.text_input("Suffix (e.g., IN)", value=b_data["suffix"], max_chars=2).upper()
-        
-    if st.button("Save System Range Allocation", type="primary"):
-        db["users"][current_user]["barcodes"][set_article] = { "prefix": new_prefix, "current": new_start, "end": new_end, "suffix": new_suffix }
-        save_data(db)
-        st.success(f"Tracking ranges configured for {set_article}!")
-        st.rerun()
-        
-    remaining = b_data["end"] - b_data["current"]
-    if remaining < 0: remaining = 0
-    st.metric(label="Available Unused Serials Remaining", value=f"{remaining + 1 if b_data['end'] > 0 else 0} Units")
-
-# --- TAB 1: WORKSPACE DISPATCH MANAGER ---
-with tabs[0]:
-    col_inputs, col_preview = st.columns([0.45, 0.55])
-    
-    with col_inputs:
-        st.subheader("Shipment Properties")
-        col_w_in, col_h_in = st.columns(2)
-        with col_w_in: width_in = st.number_input("Label Width (Inches)", value=4.0, step=0.5)
-        with col_h_in: height_in = st.number_input("Label Height (Inches)", value=6.0, step=0.5)
-            
-        saved_addresses = user_profile.get("addresses", [])
-        selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses)
-        from_initial = selected_saved if selected_saved != "-- Select Profile --" else ""
-        from_address = st.text_area("Sender 'From' Address Details", value=from_initial)
-        
-        if st.button("💾 Remember This From Address"):
-            if from_address and from_address not in user_profile["addresses"]:
-                db["users"][current_user]["addresses"].append(from_address)
-                save_data(db)
-                st.success("Address profile recorded.")
-                st.rerun()
-                
-        to_address = st.text_area("Recipient 'To' Address Details")
-        article_type = st.selectbox("Postal Article Class", ARTICLE_TYPES, key="disp_art")
-        
-        cod_amount = ""
-        if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
-        customer_id = st.text_input("India Post Customer Business ID")
-        
-        st.write("**Volumetric Specifications (Optional)**")
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        with col_m1: weight = st.text_input("Weight (g)")
-        with col_m2: length = st.text_input("Len (cm)")
-        with col_m3: breadth = st.text_input("Wid (cm)")
-        with col_m4: v_height = st.text_input("Hgt (cm)")
-            
-        col_mob1, col_mob2 = st.columns(2)
-        with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
-        with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)")
-
-        b_current = user_profile["barcodes"][article_type]
-        used_set = set(user_profile.get("used_barcodes", []))
-        queue_set = {item["tracking"] for item in st.session_state.web_queue}
-
-        if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
-            st.error("❌ Selected Range empty! Set ranges in the Settings Tab.")
-            auto_tracking = None
-        else:
-            current_serial_8 = int(b_current["current"])
-            auto_tracking = None
-            while current_serial_8 <= int(b_current["end"]):
-                check_digit = calculate_upu_s10_check_digit(current_serial_8)
-                test_tracking = f"{b_current['prefix']}{current_serial_8:08d}{check_digit}{b_current['suffix']}"
-                if test_tracking not in used_set and test_tracking not in queue_set:
-                    auto_tracking = test_tracking
-                    break
-                current_serial_8 += 1
-            
-            if auto_tracking:
-                st.info(f"Next Compliant S10 Tracking ID: **{auto_tracking}**")
-                b_current["current"] = current_serial_8
-            else:
-                st.error("❌ Barcode Duplication Limit Hit! Update Settings.")
-
-        if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
-            if not from_address or not to_address or not auto_tracking:
-                st.error("From Address, To Address, and a valid Tracking ID range are mandatory.")
-            else:
-                st.session_state.web_queue.append({
-                    "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
-                    "cod": cod_amount, "cust_id": customer_id, 
-                    "weight": weight if weight else "", "length": length if length else "", 
-                    "breadth": breadth if breadth else "", "height": v_height if v_height else "", 
-                    "s_mob": s_mob if s_mob else "", "r_mob": r_mob if r_mob else ""
-                })
-                db["users"][current_user]["used_barcodes"].append(auto_tracking)
-                db["users"][current_user]["barcodes"][article_type]["current"] = b_current["current"] + 1
-                save_data(db)
-                st.success("Staged successfully!")
-                st.rerun()
-
-    with col_preview:
-        st.subheader("Staged Processing Queue")
-        if st.session_state.web_queue:
-            display_df = pd.DataFrame(st.session_state.web_queue)[["tracking", "article", "weight", "cust_id"]]
-            st.dataframe(display_df, use_container_width=True)
-            if st.button("🗑️ Wipe Entire Active Session Queue"):
-                st.session_state.web_queue = []
-                st.rerun()
-                
-            st.write("---")
-            st.subheader("Compile Outputs")
-            
-            if st.button("⚙️ Compile Label PDFs & Sync Template Matrix"):
-                pdf_pages = []
-                template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
-                if not os.path.exists(template_filename):
-                    st.error(f"CRITICAL: Template file missing at: {template_filename}")
-                else:
-                    wb = openpyxl.load_workbook(template_filename)
-                    ws = wb.active
-                    next_row = ws.max_row + 1
-                    
-                    DPI = 300
-                    W_px = int(width_in * DPI)
-                    H_px = int(height_in * DPI)
-                    m_px = int(W_px * 0.05)
-                    use_w = W_px - (2 * m_px)
-                    
-                    for idx, entry in enumerate(st.session_state.web_queue):
-                        bc_buffer = io.BytesIO()
-                        my_barcode = Code128(entry['tracking'], writer=ImageWriter())
-                        my_barcode.write(bc_buffer)
-                        bc_buffer.seek(0)
-                        bc_img = Image.open(bc_buffer)
-                        
-                        lbl_canvas = Image.new('RGB', (W_px, H_px), color='white')
-                        draw = ImageDraw.Draw(lbl_canvas)
-                        scale = min(W_px, H_px)
-                        
-                        # --- HIGH CONTRAST LARGE FONT ARCHITECTURE ---
-                        try:
-                            f_l = ImageFont.truetype("arial.ttf", max(32, int(scale * 0.055))) # Main address text blown up large
-                            f_m = ImageFont.truetype("arial.ttf", max(26, int(scale * 0.042)))
-                            f_b = ImageFont.truetype("arialbd.ttf", max(28, int(scale * 0.045)))
-                        except:
-                            f_l = f_m = f_b = ImageFont.load_default()
-                            
-                        y_curr = m_px
-                        top_strings = [f"ARTICLE: {entry['article']}", f"CUST ID: {entry['cust_id']}"]
-                        if entry['cod']: top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
-                        
-                        for line in top_strings:
-                            draw.text((m_px, y_curr), line, fill="black", font=f_b)
-                            b_box = draw.textbbox((0,0), line, font=f_b)
-                            y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.012)
-                            
-                        y_curr += int(H_px * 0.02)
-                        draw.text((m_px, y_curr), "FROM:",
