@@ -5,6 +5,7 @@ import sys
 import json
 import time
 import io
+import base64
 import pandas as pd
 from barcode import Code128
 from barcode.writer import ImageWriter
@@ -34,19 +35,15 @@ def save_data(data):
 
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
-    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
     total_sum = sum(d * w for d, w in zip(digits, weights))
     remainder = total_sum % 11
     c = 11 - remainder
-    if c == 10: 
-        return "0"
-    elif c == 11: 
-        return "5"
-    else: 
-        return str(c)
+    if c == 10: return "0"
+    elif c == 11: return "5"
+    else: return str(c)
 
 # --- TEXT WRAPPING ENGINE ---
 def wrap_text_to_pixels(text, draw, font, max_width):
@@ -58,64 +55,80 @@ def wrap_text_to_pixels(text, draw, font, max_width):
             test_line = current_line + " " + word if current_line else word
             bbox = draw.textbbox((0, 0), test_line, font=font)
             w = bbox[2] - bbox[0]
-            if w <= max_width: 
-                current_line = test_line
+            if w <= max_width: current_line = test_line
             else:
-                if current_line: 
-                    lines.append(current_line)
+                if current_line: lines.append(current_line)
                 current_line = word
-        if current_line: 
-            lines.append(current_line)
+        if current_line: lines.append(current_line)
     return '\n'.join(lines)
 
-# --- STREAMLIT CONFIGURATION & THEME INJECTION ---
+# --- STREAMLIT PAGE INITS ---
 st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
 
-# Custom CSS injection to match the Cream background and Burgundy theme color styles from your banner artwork
-st.markdown("""
-    <style>
-        /* Set page background to soft cream */
-        .stApp {
-            background-color: #fdfbf7;
-        }
-        /* Style secondary layout frames */
-        div[data-testid="stVerticalBlock"] {
-            background-color: transparent;
-        }
-        /* Customize text inputs and dropdown borders */
-        .stTextInput input, .stTextArea textarea, .stSelectbox div {
-            border-color: #e2dcd0 !important;
-            background-color: #ffffff !important;
-        }
-        /* Give primary buttons the deep official Burgundy theme color look */
-        div.stButton > button[type="primary"] {
-            background-color: #9c0000 !important;
-            color: white !important;
-            border: none !important;
-            font-weight: bold !important;
-        }
-        div.stButton > button[type="primary"]:hover {
-            background-color: #bd0000 !important;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# --- PREMIUM BASE64 THEME BACKGROUND INJECTION ---
+def get_base64_image(image_path):
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
+
+bg_file_path = os.path.join(BASE_DIR, "background.png")
+
+if os.path.exists(bg_file_path):
+    encoded_bg = get_base64_image(bg_file_path)
+    # Inject the image as a fixed full-screen watermark backdrop with clean modern containers
+    st.markdown(f"""
+        <style>
+            .stApp {{
+                background-image: url("data:image/png;base64,{encoded_bg}");
+                background-size: cover;
+                background-position: center;
+                background-attachment: fixed;
+            }}
+            /* Create crisp white layout paper cards so forms stay highly readable over the graphic */
+            div[data-testid="stColumn"] {{
+                background-color: rgba(255, 255, 255, 0.92);
+                padding: 30px !important;
+                border-radius: 15px !important;
+                box-shadow: 0 4px 15px rgba(156, 0, 0, 0.05);
+                border: 1px solid rgba(226, 220, 208, 0.6);
+            }}
+            .stTextInput input, .stTextArea textarea, .stSelectbox div {{
+                border-color: #e2dcd0 !important;
+                background-color: #ffffff !important;
+                color: #2b2b2b !important;
+            }}
+            div.stButton > button[type="primary"] {{
+                background-color: #9c0000 !important;
+                color: white !important;
+                border: none !important;
+                font-weight: bold !important;
+                padding: 10px 24px !important;
+                border-radius: 8px !important;
+            }}
+            div.stButton > button[type="primary"]:hover {{
+                background-color: #bd0000 !important;
+            }}
+            h1, h2, h3, p, span, label {{
+                color: #3a0000 !important;
+            }}
+        </style>
+    """, unsafe_allow_html=True)
+else:
+    # Clean solid fallback style definitions if background asset file is not loaded yet
+    st.markdown("""
+        <style>
+            .stApp { background-color: #fdfbf7; }
+            div.stButton > button[type="primary"] { background-color: #9c0000 !important; color: white !important; }
+        </style>
+    """, unsafe_allow_html=True)
 
 # --- STREAMLIT STATE INITIALIZATION ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# --- DISPLAY TOP THEME BANNER ---
-# Searches your folder for the banner image file asset
-banner_path = os.path.join(BASE_DIR, "banner.png")
-if os.path.exists(banner_path):
-    st.image(banner_path, use_container_width=True)
-else:
-    # Safe text alternative fallback layout if asset file is missing or still uploading
-    st.title("📮 India Post - Enterprise Workspace")
-
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
+    st.title("📮 India Post - Enterprise Web Portal")
     auth_mode = st.radio("Access Control Node", ["Login to Existing Profile", "Register New Corporate Profile"])
     
     if auth_mode == "Login to Existing Profile":
@@ -167,10 +180,11 @@ user_profile = db["users"][current_user]
 if "used_barcodes" not in user_profile:
     user_profile["used_barcodes"] = []
 
-col_title, col_logout = st.columns([0.85, 0.15])
-with col_title:
-    st.caption(f"Client Workspace Node: **{user_profile.get('name', current_user)}** | ID: `{current_user}`")
-with col_logout:
+st.title("📮 India Post Enterprise Workspace")
+st.caption(f"Client Node: **{user_profile.get('name', current_user)}** | ID: `{current_user}`")
+
+col_logout_wrap = st.columns([0.85, 0.15])
+with col_logout_wrap[1]:
     if st.button("Core Log Out", use_container_width=True):
         st.session_state.authenticated = False
         st.session_state.username = ""
@@ -227,7 +241,7 @@ with tabs[1]:
 
 # --- TAB 1: WORKSPACE DISPATCH MANAGER ---
 with tabs[0]:
-    col_inputs, col_preview = st.columns([0.45, 0.55])
+    col_inputs, col_preview = st.columns([0.48, 0.52])
     
     with col_inputs:
         st.subheader("Shipment Properties")
