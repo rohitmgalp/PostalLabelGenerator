@@ -69,12 +69,9 @@ def wrap_text_to_pixels(text, draw, font, max_width):
     return '\n'.join(lines)
 
 # --- STREAMLIT STATE INITIALIZATION ---
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'username' not in st.session_state:
-    st.session_state.username = ""
-if 'web_queue' not in st.session_state:
-    st.session_state.web_queue = []
+if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+if 'username' not in st.session_state: st.session_state.username = ""
+if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -141,11 +138,9 @@ with col_logout:
         st.session_state.web_queue = []
         st.rerun()
 
-if current_user.lower() == "admin":
-    tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "👥 Admin Panel"]
-else:
-    tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges"]
-
+tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges"]
+if current_user.lower() == "admin": 
+    tabs_list.append("👥 Admin Panel")
 tabs = st.tabs(tabs_list)
 
 # --- TAB: ADMIN PANEL ---
@@ -156,6 +151,22 @@ if current_user.lower() == "admin":
         for uid, info in db["users"].items():
             if uid.lower() == "admin": continue
             user_records.append({
-                "User ID": uid, "Full/Company Name": info.get("name", "N/A"),
-                "Email ID": info.get("email", "N/A"), "Mobile Number": info.get("mobile", "N/A"),
+                "User ID": uid, "Full Name": info.get("name", "N/A"),
+                "Email ID": info.get("email", "N/A"), "Mobile": info.get("mobile", "N/A"),
                 "Saved Profiles": len(info.get("addresses", []))
+            })
+        if user_records:
+            admin_df = pd.DataFrame(user_records)
+            st.dataframe(admin_df, use_container_width=True)
+            output_admin = io.BytesIO()
+            with pd.ExcelWriter(output_admin, engine='openpyxl') as writer:
+                admin_df.to_excel(writer, index=False, sheet_name='Users')
+            st.download_button(label="📥 Export Client Directory to Excel", data=output_admin.getvalue(), file_name="Registered_Users_Directory.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        else:
+            st.info("No corporate client profiles have registered yet.")
+
+# --- TAB 2: RANGE ALLOCATION SETTINGS ---
+with tabs[1]:
+    st.header("UPU S10 Barcode Range Setup")
+    set_article = st.selectbox("Choose Article Classification", ARTICLE_TYPES, key="setup_art")
+    b_data = user_
