@@ -34,6 +34,7 @@ def save_data(data):
 
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
+    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
@@ -137,7 +138,6 @@ with col_logout:
         st.rerun()
 
 # --- DYNAMIC INTERFACE TABS BASED ON ROLE ---
-# If the logged-in user ID is 'admin', reveal the hidden Admin Panel tab
 if current_user.lower() == "admin":
     tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "👥 Admin Panel"]
 else:
@@ -145,7 +145,7 @@ else:
 
 tabs = st.tabs(tabs_list)
 
-# --- TAB: ADMIN PANEL (Only processed if user is admin) ---
+# --- TAB: ADMIN PANEL ---
 if current_user.lower() == "admin":
     with tabs[2]:
         st.header("👥 Registered User Directory")
@@ -153,7 +153,6 @@ if current_user.lower() == "admin":
         
         user_records = []
         for uid, info in db["users"].items():
-            # Skip showing the admin profile itself in the directory table
             if uid.lower() == "admin":
                 continue
             user_records.append({
@@ -168,7 +167,6 @@ if current_user.lower() == "admin":
             admin_df = pd.DataFrame(user_records)
             st.dataframe(admin_df, use_container_width=True)
             
-            # Allow downloading the directory as an Excel file
             output_admin = io.BytesIO()
             with pd.ExcelWriter(output_admin, engine='openpyxl') as writer:
                 admin_df.to_excel(writer, index=False, sheet_name='Users')
@@ -317,4 +315,101 @@ with tabs[0]:
                         draw = ImageDraw.Draw(lbl_canvas)
                         scale = min(W_px, H_px)
                         try:
-                            f_l = ImageFont.truetype("arial.ttf", max(24, int(scale * 0.
+                            f_l = ImageFont.truetype("arial.ttf", max(24, int(scale * 0.045)))
+                            f_m = ImageFont.truetype("arial.ttf", max(20, int(scale * 0.035)))
+                            f_b = ImageFont.truetype("arialbd.ttf", max(22, int(scale * 0.040)))
+                        except:
+                            f_l = f_m = f_b = ImageFont.load_default()
+                            
+                        y_curr = m_px
+                        top_strings = [f"ARTICLE: {entry['article']}", f"CUST ID: {entry['cust_id']}"]
+                        if entry['cod']: top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
+                        
+                        for line in top_strings:
+                            draw.text((m_px, y_curr), line, fill="black", font=f_b)
+                            b_box = draw.textbbox((0,0), line, font=f_b)
+                            y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.01)
+                            
+                        y_curr += int(H_px * 0.02)
+                        draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
+                        y_curr += int(scale * 0.04)
+                        
+                        w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
+                        draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=6)
+                        b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=6)
+                        y_cursor_from = b_box[3] + int(H_px * 0.03)
+                        
+                        draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
+                        y_cursor_from += int(scale * 0.04)
+                        
+                        w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
+                        draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=6)
+                        b_box = draw.multiline_textbbox((m_px, y_cursor_from), w_to, font=f_l, spacing=6)
+                        y_cursor_to = b_box[3] + int(H_px * 0.03)
+                        
+                        rem_h = H_px - y_cursor_to - m_px
+                        if rem_h < int(H_px * 0.15):
+                            rem_h = int(H_px * 0.15)
+                            y_cursor_to = H_px - rem_h - m_px
+                            
+                        bc_w_scaled = int(W_px * 0.75)
+                        bc_resized = bc_img.resize((bc_w_scaled, rem_h))
+                        lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, y_cursor_to))
+                        
+                        pdf_pages.append(lbl_canvas)
+                        
+                        # --- EXCEL DATA INJECTIONS ---
+                        ws.cell(row=next_row, column=1, value=idx + 1)
+                        ws.cell(row=next_row, column=2, value=entry['tracking'])
+                        ws.cell(row=next_row, column=3, value=entry['weight'])
+                        ws.cell(row=next_row, column=5, value=entry['length'])
+                        ws.cell(row=next_row, column=6, value=entry['breadth'])
+                        ws.cell(row=next_row, column=7, value=entry['height'])
+                        
+                        c_from = entry['from'].replace('\n', ', ')
+                        ws.cell(row=next_row, column=11, value=user_profile.get('name', current_user))
+                        ws.cell(row=next_row, column=13, value=c_from[:50])
+                        ws.cell(row=next_row, column=14, value=c_from[50:100])
+                        ws.cell(row=next_row, column=37, value=entry['s_mob'])
+                        
+                        c_to = entry['to'].replace('\n', ', ')
+                        ws.cell(row=next_row, column=22, value="CUSTOMER")
+                        ws.cell(row=next_row, column=24, value=c_to[:50])
+                        ws.cell(row=next_row, column=25, value=c_to[50:100])
+                        ws.cell(row=next_row, column=38, value=entry['r_mob'])
+                        
+                        if entry['cod']:
+                            ws.cell(row=next_row, column=41, value="TRUE")
+                            ws.cell(row=next_row, column=42, value=entry['cod'])
+                            
+                        next_row += 1
+                        
+                    pdf_buffer = io.BytesIO()
+                    pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
+                    st.session_state.pdf_ready = pdf_buffer.getvalue()
+                    
+                    excel_buffer = io.BytesIO()
+                    wb.save(excel_buffer)
+                    st.session_state.excel_ready = excel_buffer.getvalue()
+                    
+                    st.success("Compilation complete! Web download links are now active below.")
+
+            batch_timestamp = int(time.time())
+            if 'pdf_ready' in st.session_state:
+                st.download_button(
+                    label="📥 Download Consolidated Label PDF Bundle",
+                    data=st.session_state.pdf_ready,
+                    file_name=f"Compiled_Post_Labels_{batch_timestamp}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            if 'excel_ready' in st.session_state:
+                st.download_button(
+                    label="📥 Download Template Upload Ready Manifest",
+                    data=st.session_state.excel_ready,
+                    file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+        else:
+            st.info("The dispatch pipeline queue is currently clean.")
