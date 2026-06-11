@@ -68,14 +68,54 @@ def wrap_text_to_pixels(text, draw, font, max_width):
             lines.append(current_line)
     return '\n'.join(lines)
 
+# --- STREAMLIT CONFIGURATION & THEME INJECTION ---
+st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
+
+# Custom CSS injection to match the Cream background and Burgundy theme color styles from your banner artwork
+st.markdown("""
+    <style>
+        /* Set page background to soft cream */
+        .stApp {
+            background-color: #fdfbf7;
+        }
+        /* Style secondary layout frames */
+        div[data-testid="stVerticalBlock"] {
+            background-color: transparent;
+        }
+        /* Customize text inputs and dropdown borders */
+        .stTextInput input, .stTextArea textarea, .stSelectbox div {
+            border-color: #e2dcd0 !important;
+            background-color: #ffffff !important;
+        }
+        /* Give primary buttons the deep official Burgundy theme color look */
+        div.stButton > button[type="primary"] {
+            background-color: #9c0000 !important;
+            color: white !important;
+            border: none !important;
+            font-weight: bold !important;
+        }
+        div.stButton > button[type="primary"]:hover {
+            background-color: #bd0000 !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- STREAMLIT STATE INITIALIZATION ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
+# --- DISPLAY TOP THEME BANNER ---
+# Searches your folder for the banner image file asset
+banner_path = os.path.join(BASE_DIR, "banner.png")
+if os.path.exists(banner_path):
+    st.image(banner_path, use_container_width=True)
+else:
+    # Safe text alternative fallback layout if asset file is missing or still uploading
+    st.title("📮 India Post - Enterprise Workspace")
+
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
-    st.title("📮 India Post - Enterprise Web Portal")
     auth_mode = st.radio("Access Control Node", ["Login to Existing Profile", "Register New Corporate Profile"])
     
     if auth_mode == "Login to Existing Profile":
@@ -129,8 +169,7 @@ if "used_barcodes" not in user_profile:
 
 col_title, col_logout = st.columns([0.85, 0.15])
 with col_title:
-    st.title(f"📮 India Post Enterprise Workspace")
-    st.caption(f"Client Node: **{user_profile.get('name', current_user)}** | ID: `{current_user}`")
+    st.caption(f"Client Workspace Node: **{user_profile.get('name', current_user)}** | ID: `{current_user}`")
 with col_logout:
     if st.button("Core Log Out", use_container_width=True):
         st.session_state.authenticated = False
@@ -280,7 +319,7 @@ with tabs[0]:
             st.write("---")
             st.subheader("Compile Outputs")
             
-            if st.button("⚙️ Compile Label PDFs & Sync Template Matrix"):
+            if st.button("⚙️ Compile Label PDFs & Sync Template Matrix", type="primary"):
                 pdf_pages = []
                 template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
                 if not os.path.exists(template_filename):
@@ -306,18 +345,15 @@ with tabs[0]:
                         draw = ImageDraw.Draw(lbl_canvas)
                         scale = min(W_px, H_px)
                         
-                        # --- BULLETPROOF COMPATIBLE HIGH-CONTRAST SCALED FONTS ---
                         size_l = max(38, int(scale * 0.060))
                         size_m = max(30, int(scale * 0.046))
                         size_b = max(34, int(scale * 0.050))
                         
                         try:
-                            # Use modern Pillow scalable system features
                             f_l = ImageFont.load_default(size=size_l)
                             f_m = ImageFont.load_default(size=size_m)
                             f_b = ImageFont.load_default(size=size_b)
                         except:
-                            # Safe fallback for outdated environments
                             f_l = f_m = f_b = ImageFont.load_default()
                             
                         y_curr = m_px
@@ -346,7 +382,6 @@ with tabs[0]:
                         draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=10)
                         b_box = draw.multiline_textbbox((m_px, y_cursor_from), w_to, font=f_l, spacing=10)
                         
-                        # --- CLEAN FIXED COMPACT BARCODE BASE AT BOTTOM ---
                         bc_h_scaled = int(H_px * 0.12)
                         bc_w_scaled = int(W_px * 0.75)
                         bc_y_pos = H_px - bc_h_scaled - m_px
