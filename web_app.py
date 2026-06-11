@@ -421,4 +421,64 @@ with tabs[0]:
                             y_curr += int(size_b * 1.2)
                             
                             w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
-                            draw.multiline_text((m
+                            draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=8)
+                            b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=8)
+                            y_cursor_from = b_box[3] + int(H_px * 0.04)
+                            
+                            draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
+                            y_cursor_from += int(size_b * 1.2)
+                            
+                            w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
+                            draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=8)
+                            b_box = draw.multiline_textbbox((m_px, y_cursor_from), w_to, font=f_l, spacing=8)
+                            y_cursor_to = b_box[3] + int(H_px * 0.04)
+                            
+                            bc_h_scaled = int(H_px * 0.12)
+                            bc_w_scaled = int(W_px * 0.75)
+                            bc_y_pos = H_px - bc_h_scaled - m_px
+                            bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
+                            lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
+                        
+                        pdf_pages.append(lbl_canvas)
+                        
+                        # --- EXCEL DATA INJECTIONS ---
+                        ws.cell(row=next_row, column=1, value=idx + 1)
+                        ws.cell(row=next_row, column=2, value=entry['tracking'])
+                        ws.cell(row=next_row, column=3, value=entry['weight'])
+                        ws.cell(row=next_row, column=5, value=entry['length'])
+                        ws.cell(row=next_row, column=6, value=entry['breadth'])
+                        ws.cell(row=next_row, column=7, value=entry['height'])
+                        
+                        c_from = entry['from'].replace('\n', ', ')
+                        ws.cell(row=next_row, column=11, value=user_profile.get('name', current_user))
+                        ws.cell(row=next_row, column=13, value=c_from[:50])
+                        ws.cell(row=next_row, column=14, value=c_from[50:100])
+                        ws.cell(row=next_row, column=37, value=entry['s_mob'])
+                        
+                        c_to = entry['to'].replace('\n', ', ')
+                        ws.cell(row=next_row, column=22, value="CUSTOMER")
+                        ws.cell(row=next_row, column=24, value=c_to[:50])
+                        ws.cell(row=next_row, column=25, value=c_to[50:100])
+                        ws.cell(row=next_row, column=38, value=entry['r_mob'])
+                        
+                        if entry['cod']:
+                            ws.cell(row=next_row, column=41, value="TRUE")
+                            ws.cell(row=next_row, column=42, value=entry['cod'])
+                        next_row += 1
+                        
+                    pdf_buffer = io.BytesIO()
+                    pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
+                    st.session_state.pdf_ready = pdf_buffer.getvalue()
+                    
+                    excel_buffer = io.BytesIO()
+                    wb.save(excel_buffer)
+                    st.session_state.excel_ready = excel_buffer.getvalue()
+                    st.success("Compilation complete! Web download links active.")
+
+            batch_timestamp = int(time.time())
+            if 'pdf_ready' in st.session_state:
+                st.download_button(label="📥 Download Consolidated Label PDF Bundle", data=st.session_state.pdf_ready, file_name=f"Compiled_Post_Labels_{batch_timestamp}.pdf", mime="application/pdf", use_container_width=True)
+            if 'excel_ready' in st.session_state:
+                st.download_button(label="📥 Download Template Upload Ready Manifest", data=st.session_state.excel_ready, file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        else:
+            st.info("The dispatch pipeline queue is currently clean.")
