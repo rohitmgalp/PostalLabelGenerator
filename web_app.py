@@ -306,41 +306,49 @@ with tabs[0]:
                         draw = ImageDraw.Draw(lbl_canvas)
                         scale = min(W_px, H_px)
                         
+                        # --- BULLETPROOF COMPATIBLE HIGH-CONTRAST SCALED FONTS ---
+                        size_l = max(38, int(scale * 0.060))
+                        size_m = max(30, int(scale * 0.046))
+                        size_b = max(34, int(scale * 0.050))
+                        
                         try:
-                            f_l = ImageFont.truetype("arial.ttf", max(32, int(scale * 0.055)))
-                            f_m = ImageFont.truetype("arial.ttf", max(26, int(scale * 0.042)))
-                            f_b = ImageFont.truetype("arialbd.ttf", max(28, int(scale * 0.045)))
+                            # Use modern Pillow scalable system features
+                            f_l = ImageFont.load_default(size=size_l)
+                            f_m = ImageFont.load_default(size=size_m)
+                            f_b = ImageFont.load_default(size=size_b)
                         except:
+                            # Safe fallback for outdated environments
                             f_l = f_m = f_b = ImageFont.load_default()
                             
                         y_curr = m_px
-                        top_strings = [f"ARTICLE: {entry['article']}", f"CUST ID: {entry['cust_id']}"]
+                        top_strings = [f"ARTICLE: {entry['article']}"]
+                        if entry['cust_id']: top_strings.append(f"CUST ID: {entry['cust_id']}")
                         if entry['cod']: top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
                         
                         for line in top_strings:
                             draw.text((m_px, y_curr), line, fill="black", font=f_b)
                             b_box = draw.textbbox((0,0), line, font=f_b)
-                            y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.012)
+                            y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.015)
                             
                         y_curr += int(H_px * 0.02)
                         draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
-                        y_curr += int(scale * 0.05)
+                        y_curr += int(size_b * 1.2)
                         
                         w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
-                        draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=8)
-                        b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=8)
+                        draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=10)
+                        b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=10)
                         y_cursor_from = b_box[3] + int(H_px * 0.04)
                         
                         draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
-                        y_cursor_from += int(scale * 0.05)
+                        y_cursor_from += int(size_b * 1.2)
                         
                         w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
-                        draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=8)
-                        b_box = draw.multiline_textbbox((m_px, y_cursor_from), w_to, font=f_l, spacing=8)
-                        y_cursor_to = b_box[3] + int(H_px * 0.04)
+                        draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=10)
+                        b_box = draw.multiline_textbbox((m_px, y_cursor_from), w_to, font=f_l, spacing=10)
                         
-                        bc_h_scaled = int(H_px * 0.10)
-                        bc_w_scaled = int(W_px * 0.70)
+                        # --- CLEAN FIXED COMPACT BARCODE BASE AT BOTTOM ---
+                        bc_h_scaled = int(H_px * 0.12)
+                        bc_w_scaled = int(W_px * 0.75)
                         bc_y_pos = H_px - bc_h_scaled - m_px
                         bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
                         lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
