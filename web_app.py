@@ -227,16 +227,14 @@ if not st.session_state.authenticated:
                         st.error("Please enter both User ID and Password fields.")
                     else:
                         data = load_data()
-                        if user_id in data["users"]:
-                            # --- ENFORCED ACCESS CONTROL SUSPENSION GUARD ---
-                            if data["users"][user_id].get("locked", False):
-                                st.error("🔒 Account Suspended: This profile node has been administratively locked due to security protocols.")
-                            elif data["users"][user_id]["password"] == password:
+                        if user_id in data["users"] and data["users"][user_id]["password"] == password:
+                            # --- SECURITY ACCOUNT STATE MONITOR BANNER ---
+                            if data["users"][user_id].get("status", "active") == "locked":
+                                st.error("❌ Access Exception: This account node has been locked by the administration.")
+                            else:
                                 st.session_state.authenticated = True
                                 st.session_state.username = user_id
                                 st.rerun()
-                            else:
-                                st.error("Invalid User ID or Password verification mismatch.")
                         else:
                             st.error("Invalid User ID or Password verification mismatch.")
                             
@@ -258,7 +256,7 @@ if not st.session_state.authenticated:
                         else:
                             data["users"][user_id] = {
                                 "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
-                                "addresses": [], "used_barcodes": [], "generated_labels": [], "locked": False,
+                                "status": "active", "addresses": [], "used_barcodes": [], "generated_labels": [],
                                 "barcodes": {pool_key: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for pool_key in BARCODE_POOL_KEYS}
                             }
                             save_data(data)
@@ -401,4 +399,227 @@ with tabs[0]:
         with st.container(border=True):
             st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⏳ Staged Processing Queue</h4>", unsafe_allow_html=True)
             if st.session_state.web_queue:
-                display_df = pd.DataFrame(st.session_state.
+                display_df = pd.DataFrame(st.session_state.web_queue)[["tracking", "article", "weight", "cust_id"]]
+                st.dataframe(display_df, use_container_width=True)
+                if st.button("🗑️ Wipe Entire Active Session Queue"):
+                    st.session_state.web_queue = []
+                    st.rerun()
+                    
+                st.write("---")
+                st.subheader("Compile Outputs")
+                
+                if st.button("⚙️ Compile Label PDFs & Sync Template Matrix", type="primary"):
+                    pdf_pages = []
+                    template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
+                    if not os.path.exists(template_filename):
+                        st.error(f"CRITICAL: Template file missing at: {template_filename}")
+                    else:
+                        wb = openpyxl.load_workbook(template_filename)
+                        ws = wb.active
+                        next_row = ws.max_row + 1
+                        
+                        for idx, entry in enumerate(st.session_state.web_queue):
+                            lbl_canvas = draw_single_label(entry, width_in, height_in)
+                            pdf_pages.append(lbl_canvas)
+                            
+                            # --- EXCEL DATA INJECTIONS ---
+                            ws.cell(row=next_row, column=1, value=idx + 1)
+                            ws.cell(row=next_row, column=2, value=entry['tracking'])
+                            ws.cell(row=next_row, column=3, value=entry['weight'])
+                            ws.cell(row=next_row, column=5, value=entry['length'])
+                            ws.cell(row=next_row, column=6, value=entry['breadth'])
+                            ws.cell(row=next_row, column=7, value=entry['height'])
+                            
+                            c_from = entry['from'].replace('\n', ', ')
+                            ws.cell(row=next_row, column=11, value=user_profile.get('name', current_user))
+                            ws.cell(row=next_row, column=13, value=c_from[:50])
+                            ws.cell(row=next_row, column=14, value=c_from[50:100])
+                            ws.cell(row=next_row, column=37, value=entry['s_mob'])
+                            
+                            c_to = entry['to'].replace('\n', ', ')
+                            ws.cell(row=next_row, column=22, value="CUSTOMER")
+                            ws.cell(row=next_row, column=24, value=c_to[:50])
+                            ws.cell(row=next_row, column=25, value=c_to[50:100])
+                            ws.cell(row=next_row, column=38, value=entry['r_mob'])
+                            
+                            if entry['cod']:
+                                ws.cell(row=next_row, column=41, value="TRUE")
+                                ws.cell(row=next_row, column=42, value=entry['cod'])
+                            next_row += 1
+                            
+                            user_profile["generated_labels"].append(entry)
+                            
+                        db["users"][current_user] = user_profile
+                        save_data(db)
+                        
+                        pdf_buffer = io.BytesIO()
+                        pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
+                        st.session_state.pdf_ready = pdf_buffer.getvalue()
+                        
+                        excel_buffer = io.BytesIO()
+                        wb.save(excel_buffer)
+                        st.session_state.excel_ready = excel_buffer.getvalue()
+                        st.session_state.web_queue = [] 
+                        st.success("Compilation complete! Web download links active.")
+                        st.rerun()
+            else:
+                st.info("The dispatch pipeline queue is currently clean.")
+
+            if 'pdf_ready' in st.session_state or 'excel_ready' in st.session_state:
+                st.write("---")
+                st.markdown("<h5 style='color:#9c0000; margin-top:0;'>📥 Generated Files Cache</h5>", unsafe_allow_html=True)
+                batch_timestamp = int(time.time())
+                
+                if 'pdf_ready' in st.session_state:
+                    st.download_button(label="📥 Download Consolidated Label PDF Bundle", data=st.session_state.pdf_ready, file_name=f"Compiled_Post_Labels_{batch_timestamp}.pdf", mime="application/pdf", use_container_width=True)
+                if 'excel_ready' in st.session_state:
+                    st.download_button(label="📥 Download Template Upload Ready Manifest", data=st.session_state.excel_ready, file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                
+                if st.button("🧹 Clear Download Cache History", use_container_width=True):
+                    if 'pdf_ready' in st.session_state: del st.session_state.pdf_ready
+                    if 'excel_ready' in st.session_state: del st.session_state.excel_ready
+                    st.rerun()
+
+# --- TAB 2: RANGE ALLOCATION SETTINGS ---
+with tabs[1]:
+    with st.container(border=True):
+        st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⚙️ UPU S10 Barcode Range Setup</h4>", unsafe_allow_html=True)
+        set_article = st.selectbox("Choose Target Allocation Track Key", BARCODE_POOL_KEYS, key="setup_art")
+        b_data = user_profile["barcodes"][set_article]
+        
+        col_p, col_st, col_en, col_su = st.columns(4)
+        with col_p: new_prefix = st.text_input("Prefix (2 Alpha)", value=b_data["prefix"], max_chars=2).upper()
+        with col_st: new_start = st.number_input("Start Serial (8 Digits)", value=int(b_data["current"]), step=1)
+        with col_en: new_end = st.number_input("End Serial (8 Digits)", value=int(b_data["end"]), step=1)
+        with col_su: new_suffix = st.text_input("Suffix (2 Alpha)", value=b_data["suffix"], max_chars=2).upper()
+        
+        if st.button("Save System Range Allocation", type="primary"):
+            db["users"][current_user]["barcodes"][set_article] = { "prefix": new_prefix, "current": new_start, "end": new_end, "suffix": new_suffix }
+            save_data(db)
+            st.success(f"Configured range assignment arrays for {set_article}!")
+            st.rerun()
+            
+        remaining = b_data["end"] - b_data["current"]
+        st.metric(label="Available Unused Serials Remaining", value=f"{max(0, remaining + 1) if b_data['end'] > 0 else 0} Units")
+
+# --- TAB 3: PERMANENT ARCHIVE (GENERATED LABELS) ---
+with tabs[2]:
+    with st.container(border=True):
+        st.markdown("<h4 style='color:#9c0000; margin-top:0;'>📇 Permanent Generated Labels Registry</h4>", unsafe_allow_html=True)
+        st.write("Complete history log of all generated dispatches on this profile node.")
+        
+        archive = user_profile.get("generated_labels", [])
+        
+        if not archive:
+            st.info("No labels have been permanently generated on this profile node yet.")
+        else:
+            for idx, item in enumerate(reversed(archive)):
+                real_idx = len(archive) - 1 - idx
+                
+                row_cols = st.columns([0.5, 0.25, 0.25])
+                with row_cols[0]:
+                    st.write(f"**Barcode:** `{item['tracking']}` | **Type:** {item['article']}")
+                    st.caption(f"**Recipient:** {item['to'].splitlines()[0][:35]}...")
+                    
+                with row_cols[1]:
+                    lbl_canvas = draw_single_label(item, width_in if 'width_in' in locals() else 6.0, height_in if 'height_in' in locals() else 4.0)
+                    reprint_buf = io.BytesIO()
+                    lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
+                    st.download_button(
+                        label=f"🖨️ Reprint PDF",
+                        data=reprint_buf.getvalue(),
+                        file_name=f"Reprint_Label_{item['tracking']}.pdf",
+                        mime="application/pdf",
+                        key=f"rep_{item['tracking']}_{real_idx}"
+                    )
+                    
+                with row_cols[2]:
+                    if st.button(f"🗑️ Delete Record", key=f"del_init_{real_idx}"):
+                        st.session_state[f"confirm_prompt_{real_idx}"] = True
+                
+                if st.session_state.get(f"confirm_prompt_{real_idx}", False):
+                    st.markdown(f"❓ **Do you want to reuse barcode `{item['tracking']}` in your available range stock?**")
+                    choice_cols = st.columns([0.3, 0.3, 0.4])
+                    
+                    with choice_cols[0]:
+                        if st.button("Yes (Return to Range)", key=f"re_yes_{real_idx}"):
+                            if item['tracking'] in user_profile["used_barcodes"]:
+                                user_profile["used_barcodes"].remove(item['tracking'])
+                            user_profile["generated_labels"].pop(real_idx)
+                            db["users"][current_user] = user_profile
+                            save_data(db)
+                            del st.session_state[f"confirm_prompt_{real_idx}"]
+                            st.success(f"Barcode returned to range registry.")
+                            st.rerun()
+                            
+                    with choice_cols[1]:
+                        if st.button("No (Burn Barcode)", key=f"re_no_{real_idx}"):
+                            user_profile["generated_labels"].pop(real_idx)
+                            db["users"][current_user] = user_profile
+                            save_data(db)
+                            del st.session_state[f"confirm_prompt_{real_idx}"]
+                            st.warning(f"Barcode burned permanently from inventory.")
+                            st.rerun()
+                            
+                    with choice_cols[2]:
+                        if st.button("Cancel Operations", key=f"re_can_{real_idx}"):
+                            del st.session_state[f"confirm_prompt_{real_idx}"]
+                            st.rerun()
+                st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
+
+# --- TAB 4: ADMIN PANEL ---
+if current_user.lower() == "admin":
+    with tabs[3]:
+        with st.container(border=True):
+            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>👥 Corporate Client Infrastructure Directory</h4>", unsafe_allow_html=True)
+            st.write("Real-time profile registry database controls for node security mapping management.")
+            st.write("---")
+            
+            for uid, info in list(db["users"].items()):
+                if uid.lower() == "admin": 
+                    continue # Failsafe lock to secure the master control profile
+                    
+                u_status = info.get("status", "active")
+                
+                # Render control panel horizontal row
+                adm_row = st.columns([0.32, 0.22, 0.23, 0.23])
+                with adm_row[0]:
+                    st.markdown(f"**User ID:** `{uid}` | **Name:** {info.get('name','N/A')}")
+                    st.caption(f"📧 {info.get('email','N/A')} | 📱 {info.get('mobile','N/A')}")
+                    
+                with adm_row[1]:
+                    # Action 1: Password reset trigger
+                    if st.button("🔑 Reset Password", key=f"adm_pwd_{uid}", use_container_width=True):
+                        db["users"][uid]["password"] = "123456"
+                        save_data(db)
+                        st.success(f"Password reset to '123456' for client node '{uid}'!")
+                        time.sleep(1)
+                        st.rerun()
+                        
+                with adm_row[2]:
+                    # Action 2: Dynamic status lock/unlock toggle switch triggers
+                    if u_status == "active":
+                        if st.button("🔒 Lock User", key=f"adm_lock_{uid}", use_container_width=True):
+                            db["users"][uid]["status"] = "locked"
+                            save_data(db)
+                            st.warning(f"Client account container state locked: {uid}")
+                            time.sleep(1)
+                            st.rerun()
+                    else:
+                        if st.button("🔓 Unlock User", key=f"adm_unl_{uid}", use_container_width=True):
+                            db["users"][uid]["status"] = "active"
+                            save_data(db)
+                            st.success(f"Client account container state unlocked: {uid}")
+                            time.sleep(1)
+                            st.rerun()
+                            
+                with adm_row[3]:
+                    # Action 3: Permanent entry profile row database removal purge
+                    if st.button("🚨 Delete User", key=f"adm_del_{uid}", use_container_width=True):
+                        del db["users"][uid]
+                        save_data(db)
+                        st.error(f"Profile row container permanently dropped from server log entries: {uid}")
+                        time.sleep(1)
+                        st.rerun()
+                        
+                st.markdown("<hr style='margin:12px 0; border-color:rgba(0,0,0,0.06);'>", unsafe_allow_html=True)
