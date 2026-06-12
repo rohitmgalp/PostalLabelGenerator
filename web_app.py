@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit st
 import openpyxl
 import os
 import sys
@@ -35,7 +35,6 @@ def save_data(data):
 
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
-    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
@@ -63,66 +62,118 @@ def wrap_text_to_pixels(text, draw, font, max_width):
         if current_line: lines.append(current_line)
     return '\n'.join(lines)
 
-# --- STREAMLIT PAGE INITS ---
-st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
+# --- GENERATE SINGLE LABEL CANVAS HELPER ---
+def draw_single_label(entry, width_in, height_in):
+    DPI = 300
+    W_px = int(width_in * DPI)
+    H_px = int(height_in * DPI)
+    m_px = int(W_px * 0.05)
+    
+    bc_buffer = io.BytesIO()
+    Code128(entry['tracking'], writer=ImageWriter()).write(bc_buffer)
+    bc_buffer.seek(0)
+    bc_img = Image.open(bc_buffer)
+    
+    lbl_canvas = Image.new('RGB', (W_px, H_px), color='white')
+    draw = ImageDraw.Draw(lbl_canvas)
+    scale = min(W_px, H_px)
+    
+    size_l = max(36, int(scale * 0.058))
+    size_m = max(28, int(scale * 0.044))
+    size_b = max(32, int(scale * 0.048))
+    
+    try:
+        f_l = ImageFont.load_default(size=size_l)
+        f_m = ImageFont.load_default(size=size_m)
+        f_b = ImageFont.load_default(size=size_b)
+    except:
+        f_l = f_m = f_b = ImageFont.load_default()
+        
+    top_strings = [f"ARTICLE: {entry['article']}"]
+    if entry.get('cust_id'): top_strings.append(f"CUST ID: {entry['cust_id']}")
+    if entry.get('cod'): top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
+    
+    if W_px >= H_px:  # LANDSCAPE MODE
+        bc_h_scaled = int(H_px * 0.15)
+        bc_w_scaled = int(W_px * 0.65)
+        bc_y_pos = H_px - bc_h_scaled - m_px
+        col_width = (W_px - (3 * m_px)) // 2
+        
+        y_left = m_px
+        for line in top_strings:
+            draw.text((m_px, y_left), line, fill="black", font=f_b)
+            b_box = draw.textbbox((0,0), line, font=f_b)
+            y_left += (b_box[3] - b_box[1]) + int(H_px * 0.015)
+            
+        y_left += int(H_px * 0.02)
+        draw.text((m_px, y_left), "FROM:", fill="black", font=f_b)
+        y_left += int(size_b * 1.2)
+        
+        w_from = wrap_text_to_pixels(entry['from'], draw, f_m, col_width)
+        draw.multiline_text((m_px, y_left), w_from, fill="black", font=f_m, spacing=8)
+        
+        x_right = m_px + col_width + m_px
+        y_right = m_px
+        draw.text((x_right, y_right), "TO:", fill="black", font=f_b)
+        y_right += int(size_b * 1.2)
+        
+        w_to = wrap_text_to_pixels(entry['to'], draw, f_l, col_width)
+        draw.multiline_text((x_right, y_right), w_to, fill="black", font=f_l, spacing=8)
+        
+        bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
+        lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
+    else:  # PORTRAIT MODE
+        use_w = W_px - (2 * m_px)
+        y_curr = m_px
+        for line in top_strings:
+            draw.text((m_px, y_curr), line, fill="black", font=f_b)
+            b_box = draw.textbbox((0,0), line, font=f_b)
+            y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.012)
+            
+        y_curr += int(H_px * 0.02)
+        draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
+        y_curr += int(size_b * 1.2)
+        
+        w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
+        draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=8)
+        b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=8)
+        y_cursor_from = b_box[3] + int(H_px * 0.04)
+        
+        draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
+        y_cursor_from += int(size_b * 1.2)
+        
+        w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
+        draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=8)
+        b_box = draw.multiline_textbbox((m_px, y_cursor_from), w_to, font=f_l, spacing=8)
+        y_cursor_to = b_box[3] + int(H_px * 0.04)
+        
+        bc_h_scaled = int(H_px * 0.12)
+        bc_w_scaled = int(W_px * 0.75)
+        bc_y_pos = H_px - bc_h_scaled - m_px
+        bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
+        lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
+        
+    return lbl_canvas
 
-# --- PREMIUM BASE64 THEME BACKGROUND INJECTION ---
-def get_base64_image(image_path):
-    with open(image_path, "rb") as img_file:
-        return base64.b64encode(img_file.read()).decode()
+# --- STREAMLIT INITIALIZATION ---
+if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+if 'username' not in st.session_state: st.session_state.username = ""
+if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
+# --- PREMIUM BACKGROUND INJECTION ---
 bg_file_path = os.path.join(BASE_DIR, "background.png")
-
 if os.path.exists(bg_file_path):
     encoded_bg = get_base64_image(bg_file_path)
     st.markdown(f"""
         <style>
-            .stApp {{
-                background-image: url("data:image/png;base64,{encoded_bg}");
-                background-size: cover;
-                background-position: center;
-                background-attachment: fixed;
-            }}
-            div[data-testid="stColumn"] {{
-                background-color: rgba(255, 255, 255, 0.92);
-                padding: 30px !important;
-                border-radius: 15px !important;
-                box-shadow: 0 4px 15px rgba(156, 0, 0, 0.05);
-                border: 1px solid rgba(226, 220, 208, 0.6);
-            }}
-            .stTextInput input, .stTextArea textarea, .stSelectbox div {{
-                border-color: #e2dcd0 !important;
-                background-color: #ffffff !important;
-                color: #2b2b2b !important;
-            }}
-            div.stButton > button[type="primary"] {{
-                background-color: #9c0000 !important;
-                color: white !important;
-                border: none !important;
-                font-weight: bold !important;
-                padding: 10px 24px !important;
-                border-radius: 8px !important;
-            }}
-            div.stButton > button[type="primary"]:hover {{
-                background-color: #bd0000 !important;
-            }}
-            h1, h2, h3, p, span, label {{
-                color: #3a0000 !important;
-            }}
+            .stApp {{ background-image: url("data:image/png;base64,{encoded_bg}"); background-size: cover; background-position: center; background-attachment: fixed; }}
+            div[data-testid="stColumn"] {{ background-color: rgba(255, 255, 255, 0.92); padding: 30px !important; border-radius: 15px !important; box-shadow: 0 4px 15px rgba(156, 0, 0, 0.05); border: 1px solid rgba(226, 220, 208, 0.6); }}
+            .stTextInput input, .stTextArea textarea, .stSelectbox div {{ border-color: #e2dcd0 !important; background-color: #ffffff !important; color: #2b2b2b !important; }}
+            div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
+            div.stButton > button[type="primary"]:hover {{ background-color: #bd0000 !important; }}
+            h1, h2, h3, p, span, label {{ color: #3a0000 !important; }}
         </style>
     """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-        <style>
-            .stApp { background-color: #fdfbf7; }
-            div.stButton > button[type="primary"] { background-color: #9c0000 !important; color: white !important; }
-        </style>
-    """, unsafe_allow_html=True)
-
-# --- STREAMLIT STATE INITIALIZATION ---
-if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-if 'username' not in st.session_state: st.session_state.username = ""
-if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -159,15 +210,15 @@ if not st.session_state.authenticated:
             else:
                 data = load_data()
                 if user_id in data["users"]:
-                    st.error("This User ID is already occupied under an active tracking segment.")
+                    st.error("This User ID is already occupied.")
                 else:
                     data["users"][user_id] = {
                         "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
-                        "addresses": [], "used_barcodes": [],
+                        "addresses": [], "used_barcodes": [], "generated_labels": [],
                         "barcodes": {atype: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for atype in ARTICLE_TYPES}
                     }
                     save_data(data)
-                    st.success("Registration success! Choose 'Login to Existing Profile' mode above to enter.")
+                    st.success("Registration success! Please log in.")
     st.stop()
 
 # --- ENTERPRISE INTERFACE DASHBOARD ---
@@ -175,8 +226,9 @@ current_user = st.session_state.username
 db = load_data()
 user_profile = db["users"][current_user]
 
-if "used_barcodes" not in user_profile:
-    user_profile["used_barcodes"] = []
+# Failsafe profile upgrades for older data nodes
+if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
+if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
 
 st.title("📮 India Post Enterprise Workspace")
 st.caption(f"Client Node: **{user_profile.get('name', current_user)}** | ID: `{current_user}`")
@@ -189,53 +241,80 @@ with col_logout_wrap[1]:
         st.session_state.web_queue = []
         st.rerun()
 
-tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges"]
+tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 Generated Labels"]
 if current_user.lower() == "admin": 
     tabs_list.append("👥 Admin Panel")
 tabs = st.tabs(tabs_list)
 
-# --- TAB: ADMIN PANEL ---
-if current_user.lower() == "admin":
-    with tabs[2]:
-        st.header("👥 Registered User Directory")
-        user_records = []
-        for uid, info in db["users"].items():
-            if uid.lower() == "admin": continue
-            user_records.append({
-                "User ID": uid, "Full Name": info.get("name", "N/A"),
-                "Email ID": info.get("email", "N/A"), "Mobile": info.get("mobile", "N/A"),
-                "Saved Profiles": len(info.get("addresses", []))
-            })
-        if user_records:
-            admin_df = pd.DataFrame(user_records)
-            st.dataframe(admin_df, use_container_width=True)
-            output_admin = io.BytesIO()
-            with pd.ExcelWriter(output_admin, engine='openpyxl') as writer:
-                admin_df.to_excel(writer, index=False, sheet_name='Users')
-            st.download_button(label="📥 Export Client Directory to Excel", data=output_admin.getvalue(), file_name="Registered_Users_Directory.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        else:
-            st.info("No corporate client profiles have registered yet.")
-
-# --- TAB 2: RANGE ALLOCATION SETTINGS ---
-with tabs[1]:
-    st.header("UPU S10 Barcode Range Setup")
-    set_article = st.selectbox("Choose Article Classification", ARTICLE_TYPES, key="setup_art")
-    b_data = user_profile["barcodes"][set_article]
+# --- TAB 3: PERMANENT ARCHIVE (GENERATED LABELS) ---
+with tabs[2]:
+    st.header("📇 Permanent Generated Labels Registry")
+    st.write("Complete operational history ledger across all system print allocations.")
     
-    col_p, col_st, col_en, col_su = st.columns(4)
-    with col_p: new_prefix = st.text_input("Prefix (2 Alpha)", value=b_data["prefix"], max_chars=2).upper()
-    with col_st: new_start = st.number_input("Start Serial (8 Digits)", value=int(b_data["current"]), step=1)
-    with col_en: new_end = st.number_input("End Serial (8 Digits)", value=int(b_data["end"]), step=1)
-    with col_su: new_suffix = st.text_input("Suffix (2 Alpha)", value=b_data["suffix"], max_chars=2).upper()
-        
-    if st.button("Save System Range Allocation", type="primary"):
-        db["users"][current_user]["barcodes"][set_article] = { "prefix": new_prefix, "current": new_start, "end": new_end, "suffix": new_suffix }
-        save_data(db)
-        st.success("Tracking ranges configured!")
-        st.rerun()
-        
-    remaining = b_data["end"] - b_data["current"]
-    st.metric(label="Available Unused Serials Remaining", value=f"{max(0, remaining + 1) if b_data['end'] > 0 else 0} Units")
+    archive = user_profile.get("generated_labels", [])
+    
+    if not archive:
+        st.info("No labels have been permanently generated on this profile node yet.")
+    else:
+        # Loop through archive rows in reverse chronological order
+        for idx, item in enumerate(reversed(archive)):
+            real_idx = len(archive) - 1 - idx
+            
+            # Layout configuration block card row
+            row_cols = st.columns([0.5, 0.25, 0.25])
+            with row_cols[0]:
+                st.write(f"**Barcode:** `{item['tracking']}` | **Type:** {item['article']}")
+                st.caption(f"**Recipient Summary:** {item['to'].splitlines()[0][:35]}...")
+                
+            with row_cols[1]:
+                # Dynamic isolated single-reprint stream processing
+                lbl_canvas = draw_single_label(item, 4.0, 6.0) # Render standard printable sizes
+                reprint_buf = io.BytesIO()
+                lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
+                st.download_button(
+                    label=f"🖨️ Reprint PDF",
+                    data=reprint_buf.getvalue(),
+                    file_name=f"Reprint_Label_{item['tracking']}.pdf",
+                    mime="application/pdf",
+                    key=f"rep_{item['tracking']}_{real_idx}"
+                )
+                
+            with row_cols[2]:
+                if st.button(f"🗑️ Delete Record", key=f"del_init_{real_idx}"):
+                    st.session_state[f"confirm_prompt_{real_idx}"] = True
+            
+            # Render context confirmation choices overlay if prompt variable flags true
+            if st.session_state.get(f"confirm_prompt_{real_idx}", False):
+                st.markdown(f"❓ **Do you want to reuse barcode `{item['tracking']}` in your available range stock?**")
+                choice_cols = st.columns([0.3, 0.3, 0.4])
+                
+                with choice_cols[0]:
+                    if st.button("Yes (Return to Range)", key=f"re_yes_{real_idx}"):
+                        # Strip sequence tracking records out from blocking memory ledger sets
+                        if item['tracking'] in user_profile["used_barcodes"]:
+                            user_profile["used_barcodes"].remove(item['tracking'])
+                        user_profile["generated_labels"].pop(real_idx)
+                        db["users"][current_user] = user_profile
+                        save_data(db)
+                        del st.session_state[f"confirm_prompt_{real_idx}"]
+                        st.success(f"Barcode returned to range registry.")
+                        st.rerun()
+                        
+                with choice_cols[1]:
+                    if st.button("No (Burn Barcode)", key=f"re_no_{real_idx}"):
+                        # Drop row registry information but leave tracking block locked inside consumed logs
+                        user_profile["generated_labels"].pop(real_idx)
+                        db["users"][current_user] = user_profile
+                        save_data(db)
+                        del st.session_state[f"confirm_prompt_{real_idx}"]
+                        st.warning(f"Barcode burned permanently from inventory.")
+                        st.rerun()
+                        
+                with choice_cols[2]:
+                    if st.button("Cancel Operations", key=f"re_can_{real_idx}"):
+                        del st.session_state[f"confirm_prompt_{real_idx}"]
+                        st.rerun()
+            st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
 
 # --- TAB 1: WORKSPACE DISPATCH MANAGER ---
 with tabs[0]:
@@ -277,7 +356,6 @@ with tabs[0]:
         with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
         with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)")
 
-        # --- DYNAMIC BARCODE COLLISION ELIMINATION ENGINE ---
         b_current = user_profile["barcodes"][article_type]
         used_set = set(user_profile.get("used_barcodes", []))
         queue_set = {item["tracking"] for item in st.session_state.web_queue}
@@ -341,104 +419,8 @@ with tabs[0]:
                     ws = wb.active
                     next_row = ws.max_row + 1
                     
-                    DPI = 300
-                    W_px = int(width_in * DPI)
-                    H_px = int(height_in * DPI)
-                    m_px = int(W_px * 0.05)
-                    
                     for idx, entry in enumerate(st.session_state.web_queue):
-                        bc_buffer = io.BytesIO()
-                        Code128(entry['tracking'], writer=ImageWriter()).write(bc_buffer)
-                        bc_buffer.seek(0)
-                        bc_img = Image.open(bc_buffer)
-                        
-                        lbl_canvas = Image.new('RGB', (W_px, H_px), color='white')
-                        draw = ImageDraw.Draw(lbl_canvas)
-                        scale = min(W_px, H_px)
-                        
-                        size_l = max(36, int(scale * 0.058))
-                        size_m = max(28, int(scale * 0.044))
-                        size_b = max(32, int(scale * 0.048))
-                        
-                        try:
-                            f_l = ImageFont.load_default(size=size_l)
-                            f_m = ImageFont.load_default(size=size_m)
-                            f_b = ImageFont.load_default(size=size_b)
-                        except:
-                            f_l = f_m = f_b = ImageFont.load_default()
-                            
-                        top_strings = [f"ARTICLE: {entry['article']}"]
-                        if entry['cust_id']: top_strings.append(f"CUST ID: {entry['cust_id']}")
-                        if entry['cod']: top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
-                        
-                        # --- ASPECT DETECTOR CONTEXT LAYOUT ---
-                        if W_px >= H_px:  # LANDSCAPE MODE (2-COLUMN GRID)
-                            # Dedicate bottom 15% height strictly to barcode
-                            bc_h_scaled = int(H_px * 0.15)
-                            bc_w_scaled = int(W_px * 0.65)
-                            bc_y_pos = H_px - bc_h_scaled - m_px
-                            
-                            # Split upper half into two equal boxes
-                            col_width = (W_px - (3 * m_px)) // 2
-                            
-                            # Left Column: Metadata + Sender Address
-                            y_left = m_px
-                            for line in top_strings:
-                                draw.text((m_px, y_left), line, fill="black", font=f_b)
-                                b_box = draw.textbbox((0,0), line, font=f_b)
-                                y_left += (b_box[3] - b_box[1]) + int(H_px * 0.015)
-                                
-                            y_left += int(H_px * 0.02)
-                            draw.text((m_px, y_left), "FROM:", fill="black", font=f_b)
-                            y_left += int(size_b * 1.2)
-                            
-                            w_from = wrap_text_to_pixels(entry['from'], draw, f_m, col_width)
-                            draw.multiline_text((m_px, y_left), w_from, fill="black", font=f_m, spacing=8)
-                            
-                            # Right Column: Recipient Address
-                            x_right = m_px + col_width + m_px
-                            y_right = m_px
-                            draw.text((x_right, y_right), "TO:", fill="black", font=f_b)
-                            y_right += int(size_b * 1.2)
-                            
-                            w_to = wrap_text_to_pixels(entry['to'], draw, f_l, col_width)
-                            draw.multiline_text((x_right, y_right), w_to, fill="black", font=f_l, spacing=8)
-                            
-                            # Centered base barcode placement
-                            bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
-                            lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
-                            
-                        else:  # PORTRAIT MODE (VERTICAL STACK)
-                            use_w = W_px - (2 * m_px)
-                            y_curr = m_px
-                            for line in top_strings:
-                                draw.text((m_px, y_curr), line, fill="black", font=f_b)
-                                b_box = draw.textbbox((0,0), line, font=f_b)
-                                y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.012)
-                                
-                            y_curr += int(H_px * 0.02)
-                            draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
-                            y_curr += int(size_b * 1.2)
-                            
-                            w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
-                            draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=8)
-                            b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=8)
-                            y_cursor_from = b_box[3] + int(H_px * 0.04)
-                            
-                            draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
-                            y_cursor_from += int(size_b * 1.2)
-                            
-                            w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
-                            draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=8)
-                            b_box = draw.multiline_textbbox((m_px, y_cursor_from), w_to, font=f_l, spacing=8)
-                            y_cursor_to = b_box[3] + int(H_px * 0.04)
-                            
-                            bc_h_scaled = int(H_px * 0.12)
-                            bc_w_scaled = int(W_px * 0.75)
-                            bc_y_pos = H_px - bc_h_scaled - m_px
-                            bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
-                            lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
-                        
+                        lbl_canvas = draw_single_label(entry, width_in, height_in)
                         pdf_pages.append(lbl_canvas)
                         
                         # --- EXCEL DATA INJECTIONS ---
@@ -466,6 +448,13 @@ with tabs[0]:
                             ws.cell(row=next_row, column=42, value=entry['cod'])
                         next_row += 1
                         
+                        # Commit copy to permanent archive sequence lists
+                        user_profile["generated_labels"].append(entry)
+                        
+                    # Save updated structural matrices data targets
+                    db["users"][current_user] = user_profile
+                    save_data(db)
+                    
                     pdf_buffer = io.BytesIO()
                     pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
                     st.session_state.pdf_ready = pdf_buffer.getvalue()
@@ -473,7 +462,9 @@ with tabs[0]:
                     excel_buffer = io.BytesIO()
                     wb.save(excel_buffer)
                     st.session_state.excel_ready = excel_buffer.getvalue()
+                    st.session_state.web_queue = [] # Auto-flush queue on execution success
                     st.success("Compilation complete! Web download links active.")
+                    st.rerun()
 
             batch_timestamp = int(time.time())
             if 'pdf_ready' in st.session_state:
@@ -482,3 +473,21 @@ with tabs[0]:
                 st.download_button(label="📥 Download Template Upload Ready Manifest", data=st.session_state.excel_ready, file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         else:
             st.info("The dispatch pipeline queue is currently clean.")
+
+# --- TAB 2: RANGE ALLOCATION SETTINGS ---
+with tabs[1]:
+    st.header("UPU S10 Barcode Range Setup")
+    set_article = st.selectbox("Choose Article Classification", ARTICLE_TYPES, key="setup_art")
+    b_data = user_profile["barcodes"][set_article]
+    col_p, col_st, col_en, col_su = st.columns(4)
+    with col_p: new_prefix = st.text_input("Prefix (2 Alpha)", value=b_data["prefix"], max_chars=2).upper()
+    with col_st: new_start = st.number_input("Start Serial (8 Digits)", value=int(b_data["current"]), step=1)
+    with col_en: new_end = st.number_input("End Serial (8 Digits)", value=int(b_data["end"]), step=1)
+    with col_su: new_suffix = st.text_input("Suffix (2 Alpha)", value=b_data["suffix"], max_chars=2).upper()
+    if st.button("Save System Range Allocation", type="primary"):
+        db["users"][current_user]["barcodes"][set_article] = { "prefix": new_prefix, "current": new_start, "end": new_end, "suffix": new_suffix }
+        save_data(db)
+        st.success("Tracking ranges configured!")
+        st.rerun()
+    remaining = b_data["end"] - b_data["current"]
+    st.metric(label="Available Unused Serials Remaining", value=f"{max(0, remaining + 1) if b_data['end'] > 0 else 0} Units")
