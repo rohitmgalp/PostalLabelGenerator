@@ -188,7 +188,7 @@ bg_file_path = os.path.join(BASE_DIR, "background.png")
 whatsapp_html = """
     <a href="https://wa.me/918075386388" target="_blank" class="whatsapp-float">
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="margin-right: 8px; display: inline-block; vertical-align: middle;">
-            <path d="M13.601 2.326A7.85 7.85 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.9 7.9 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.9 7.9 0 0 0 13.6 2.326zM7.994 14.521a6.6 6.6 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c1.11-4.285 4.564-6.574 8.718-6.574a6.58 6.58 0 0 1 4.66 2.72 6.58 6.58 0 0 1 1.936 4.663c-.004 4.2-3.563 7.759-7.923 7.759M11.57 9.447c-.19-.094-1.127-.556-1.301-.62-.174-.064-.3-.094-.426.094-.126.188-.488.62-.6.749-.113.128-.226.144-.417.05-.19-.095-.807-.296-1.536-.855-.567-.457-.951-1.022-1.062-1.116-.112-.094-.012-.145.083-.242.085-.087.174-.188.26-.283.087-.095.116-.16.174-.319.059-.158.03-.3-.015-.394-.045-.094-.426-1.026-.583-1.409-.153-.367-.307-.317-.418-.317-.109-.004-.234-.004-.36-.004a.69.69 0 0 0-.5.234c-.174.188-.665.65-0.665 1.583s.678 1.834.773 1.96c.095.127 1.332 2.035 3.226 2.856.45.195.8.311 1.075.398.452.144.863.124 1.189.062.363-.069 1.127-.461 1.284-.906.158-.444.158-.825.11-1.013-.048-.19-.174-.3-.365-.394"/>
+            <path d="M13.601 2.326A7.85 7.85 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.9 7.9 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.9 7.9 0 0 0 13.6 2.326zM7.994 14.521a6.6 6.6 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c1.11-4.285 4.564-6.574 8.718-6.574a6.58 6.58 0 0 1 4.66 2.72 6.58 6.58 0 0 1 1.936 4.663c-.004 4.2-3.563 7.759-7.923 7.759M11.57 9.447c-.19-.094-1.127-.556-1.301-.62-.174-.064-.3-.094-.426.094-.126.188-.488.62-.6.749-.113.128-.226.144-.417.05-.19-.095-.807-.296-1.536-.855-.567-.457-.951-1.022-1.062-1.116-.112-.094-.012-.145.083-.242.085-.087.174-.188.26-.283.085-.087.174-.188.26-.283.087-.095.116-.16.174-.319.059-.158.03-.3-.015-.394-.045-.094-.426-1.026-.583-1.409-.153-.367-.307-.317-.418-.317-.109-.004-.234-.004-.36-.004a.69.69 0 0 0-.5.234c-.174.188-.665.65-0.665 1.583s.678 1.834.773 1.96c.095.127 1.332 2.035 3.226 2.856.45.195.8.311 1.075.398.452.144.863.124 1.189.062.363-.069 1.127-.461 1.284-.906.158-.444.158-.825.11-1.013-.048-.19-.174-.3-.365-.394"/>
         </svg>Contact Us
     </a>
 """
@@ -203,11 +203,11 @@ if os.path.exists(bg_file_path):
             div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
             div.stButton > button[type="primary"]:hover {{ background-color: #bd0000 !important; }}
             
-            /* Clean bottom-left floating contact component anchor links styling maps */
+            /* Clean floating contact link anchored layout safely to the right bottom aspect */
             .whatsapp-float {{
                 position: fixed;
                 bottom: 24px;
-                left: 24px;
+                right: 24px;
                 background-color: #25d366;
                 color: white !important;
                 padding: 12px 22px;
@@ -235,7 +235,7 @@ else:
             .stApp {{ background-color: #fdfbf7; }}
             div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; }}
             .whatsapp-float {{
-                position: fixed; bottom: 24px; left: 24px; background-color: #25d366; color: white !important;
+                position: fixed; bottom: 24px; right: 24px; background-color: #25d366; color: white !important;
                 padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: sans-serif;
                 font-weight: 700; font-size: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.22); z-index: 99999;
                 display: inline-flex; align-items: center; transition: transform 0.2s ease;
