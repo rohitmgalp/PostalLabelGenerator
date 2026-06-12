@@ -162,7 +162,9 @@ def draw_single_label(entry, width_in, height_in):
     return lbl_canvas
 
 # --- THEME STYLING INJECTION ---
+st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
 bg_file_path = os.path.join(BASE_DIR, "background.png")
+
 if os.path.exists(bg_file_path):
     encoded_bg = get_base64_image(bg_file_path)
     st.markdown(f"""
@@ -208,83 +210,4 @@ if not st.session_state.authenticated:
         reg_name = st.text_input("Full Name / Company Name").strip()
         reg_email = st.text_input("Email ID").strip()
         reg_mobile = st.text_input("Mobile Number").strip()
-        user_id = st.text_input("Create User ID", key="reg_uid").strip()
-        password = st.text_input("Create Password", type="password", key="reg_pwd").strip()
-        
-        if st.button("Register Infrastructure Profile", type="primary"):
-            if not reg_name or not reg_email or not reg_mobile or not user_id or not password:
-                st.error("All registration field inputs are mandatory values.")
-            else:
-                data = load_data()
-                if user_id in data["users"]:
-                    st.error("This User ID is already occupied.")
-                else:
-                    data["users"][user_id] = {
-                        "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
-                        "addresses": [], "used_barcodes": [], "generated_labels": [],
-                        "barcodes": {atype: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for atype in ARTICLE_TYPES}
-                    }
-                    save_data(data)
-                    st.success("Registration success! Please log in.")
-    st.stop()
-
-# --- ENTERPRISE INTERFACE DASHBOARD ---
-current_user = st.session_state.username
-db = load_data()
-user_profile = db["users"][current_user]
-
-if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
-if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
-
-# Clean Header Context Row (Low profile to prevent clashing with the wallpaper background text)
-col_logout_wrap = st.columns([0.80, 0.20])
-with col_logout_wrap[0]:
-    st.markdown(f"<h4 style='margin:0;'>📋 Account Node: {user_profile.get('name', current_user)} | ID: `{current_user}`</h4>", unsafe_allow_html=True)
-with col_logout_wrap[1]:
-    if st.button("Core Log Out", use_container_width=True):
-        st.session_state.authenticated = False
-        st.session_state.username = ""
-        st.session_state.web_queue = []
-        st.rerun()
-
-tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 Generated Labels"]
-if current_user.lower() == "admin": 
-    tabs_list.append("👥 Admin Panel")
-tabs = st.tabs(tabs_list)
-
-# --- TAB 1: DISPATCH MANAGER ---
-with tabs[0]:
-    col_inputs, col_preview = st.columns([0.48, 0.52])
-    
-    with col_inputs:
-        with st.container(border=True):
-            st.subheader("Shipment Properties")
-            col_w_in, col_h_in = st.columns(2)
-            with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
-            with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
-                
-            saved_addresses = user_profile.get("addresses", [])
-            selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses)
-            from_initial = selected_saved if selected_saved != "-- Select Profile --" else ""
-            from_address = st.text_area("Sender 'From' Address Details", value=from_initial)
-            
-            if st.button("💾 Remember This From Address"):
-                if from_address and from_address not in user_profile["addresses"]:
-                    db["users"][current_user]["addresses"].append(from_address)
-                    save_data(db)
-                    st.success("Address profile recorded.")
-                    st.rerun()
-                    
-            to_address = st.text_area("Recipient 'To' Address Details")
-            article_type = st.selectbox("Postal Article Class", ARTICLE_TYPES, key="disp_art")
-            
-            cod_amount = ""
-            if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
-            customer_id = st.text_input("India Post Customer Business ID")
-            
-            st.write("**Volumetric Specifications (Optional)**")
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: weight = st.text_input("Weight (g)")
-            with col_m2: length = st.text_input("Len (cm)")
-            with col_m3: breadth = st.text_input("Wid (cm)")
-            with col_m4: v_
+        user_id = st.text_input("Create User ID", key="reg
