@@ -246,6 +246,8 @@ with col_logout_wrap[1]:
         st.session_state.authenticated = False
         st.session_state.username = ""
         st.session_state.web_queue = []
+        if 'pdf_ready' in st.session_state: del st.session_state.pdf_ready
+        if 'excel_ready' in st.session_state: del st.session_state.excel_ready
         st.rerun()
 
 tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 Generated Labels"]
@@ -269,14 +271,24 @@ with tabs[0]:
             from_initial = selected_saved if selected_saved != "-- Select Profile --" else ""
             from_address = st.text_area("Sender 'From' Address Details", value=from_initial)
             
-            if st.button("💾 Remember This From Address"):
-                if from_address and from_address not in user_profile["addresses"]:
-                    db["users"][current_user]["addresses"].append(from_address)
-                    save_data(db)
-                    st.success("Address profile recorded.")
-                    st.rerun()
+            # --- PROFILE MANAGEMENT ACTIONS MAP ---
+            col_addr_actions = st.columns(2)
+            with col_addr_actions[0]:
+                if st.button("💾 Remember Address", use_container_width=True):
+                    if from_address and from_address not in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].append(from_address)
+                        save_data(db)
+                        st.success("Address profile recorded.")
+                        st.rerun()
+            with col_addr_actions[1]:
+                if st.button("🗑️ Delete Address", use_container_width=True):
+                    if selected_saved != "-- Select Profile --" and selected_saved in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].remove(selected_saved)
+                        save_data(db)
+                        st.warning("Address profile removed.")
+                        st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details")
+            to_address = st.text_area("Recipient 'To' Address Details", key="recipient_to_input")
             article_type = st.selectbox("Postal Article Class", ARTICLE_TYPES, key="disp_art")
             
             cod_amount = ""
@@ -332,6 +344,9 @@ with tabs[0]:
                     db["users"][current_user]["used_barcodes"].append(auto_tracking)
                     db["users"][current_user]["barcodes"][article_type]["current"] = b_current["current"] + 1
                     save_data(db)
+                    
+                    # Automated clean reset for recipient text area field key memory values
+                    st.session_state.recipient_to_input = ""
                     st.success("Staged successfully!")
                     st.rerun()
 
@@ -402,14 +417,25 @@ with tabs[0]:
                         st.session_state.web_queue = [] 
                         st.success("Compilation complete! Web download links active.")
                         st.rerun()
+            else:
+                st.info("The dispatch pipeline queue is currently clean.")
 
+            # --- PERSISTENT GLOBAL COMPILATION DOWNLOAD MODULE BLOCK ---
+            # Locked completely outside the queue checks so compilation downloads never disappear on refresh
+            if 'pdf_ready' in st.session_state or 'excel_ready' in st.session_state:
+                st.write("---")
+                st.markdown("<h5 style='color:#9c0000; margin-top:0;'>📥 Generated Files Cache</h5>", unsafe_allow_html=True)
                 batch_timestamp = int(time.time())
+                
                 if 'pdf_ready' in st.session_state:
                     st.download_button(label="📥 Download Consolidated Label PDF Bundle", data=st.session_state.pdf_ready, file_name=f"Compiled_Post_Labels_{batch_timestamp}.pdf", mime="application/pdf", use_container_width=True)
                 if 'excel_ready' in st.session_state:
                     st.download_button(label="📥 Download Template Upload Ready Manifest", data=st.session_state.excel_ready, file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-            else:
-                st.info("The dispatch pipeline queue is currently clean.")
+                
+                if st.button("🧹 Clear Download Cache History", use_container_width=True):
+                    if 'pdf_ready' in st.session_state: del st.session_state.pdf_ready
+                    if 'excel_ready' in st.session_state: del st.session_state.excel_ready
+                    st.rerun()
 
 # --- TAB 2: RANGE ALLOCATION SETTINGS ---
 with tabs[1]:
@@ -450,7 +476,7 @@ with tabs[2]:
                     st.caption(f"**Recipient:** {item['to'].splitlines()[0][:35]}...")
                     
                 with row_cols[1]:
-                    lbl_canvas = draw_single_label(item, 6.0, 4.0)
+                    lbl_canvas = draw_single_label(item, width_in if 'width_in' in locals() else 6.0, height_in if 'height_in' in locals() else 4.0)
                     reprint_buf = io.BytesIO()
                     lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
                     st.download_button(
