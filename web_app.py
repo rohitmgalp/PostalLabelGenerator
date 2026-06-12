@@ -182,6 +182,7 @@ if os.path.exists(bg_file_path):
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
+if 'clear_counter' not in st.session_state: st.session_state.clear_counter = 0
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -268,10 +269,8 @@ with tabs[0]:
                 
             saved_addresses = user_profile.get("addresses", [])
             selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses)
-            from_initial = selected_saved if selected_saved != "-- Select Profile --" else ""
-            from_address = st.text_area("Sender 'From' Address Details", value=from_initial)
+            from_address = st.text_area("Sender 'From' Address Details", value=selected_saved if selected_saved != "-- Select Profile --" else "")
             
-            # --- PROFILE MANAGEMENT ACTIONS MAP ---
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
                 if st.button("💾 Remember Address", use_container_width=True):
@@ -288,7 +287,9 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details", key="recipient_to_input")
+            # --- DYNAMIC RECIPIENT KEY BINDING TRACKER ---
+            # Appending clear_counter forces Streamlit to regenerate a clean widget whenever the counter updates
+            to_address = st.text_area("Recipient 'To' Address Details", key=f"recipient_to_input_{st.session_state.clear_counter}")
             article_type = st.selectbox("Postal Article Class", ARTICLE_TYPES, key="disp_art")
             
             cod_amount = ""
@@ -345,8 +346,8 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][article_type]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Automated clean reset for recipient text area field key memory values
-                    st.session_state.recipient_to_input = ""
+                    # Increment counter to force-clear the text widget state natively
+                    st.session_state.clear_counter += 1
                     st.success("Staged successfully!")
                     st.rerun()
 
@@ -420,8 +421,7 @@ with tabs[0]:
             else:
                 st.info("The dispatch pipeline queue is currently clean.")
 
-            # --- PERSISTENT GLOBAL COMPILATION DOWNLOAD MODULE BLOCK ---
-            # Locked completely outside the queue checks so compilation downloads never disappear on refresh
+            # --- PERSISTENT OUTPUT ACTIONS LOG BLOCK ---
             if 'pdf_ready' in st.session_state or 'excel_ready' in st.session_state:
                 st.write("---")
                 st.markdown("<h5 style='color:#9c0000; margin-top:0;'>📥 Generated Files Cache</h5>", unsafe_allow_html=True)
