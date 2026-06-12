@@ -228,9 +228,9 @@ if not st.session_state.authenticated:
                     else:
                         data = load_data()
                         if user_id in data["users"] and data["users"][user_id]["password"] == password:
-                            # --- SECURITY ACCOUNT STATE MONITOR BANNER ---
+                            # --- SECURITY LOCK REJECTION CONTROLLER GAP GATEWAY ---
                             if data["users"][user_id].get("status", "active") == "locked":
-                                st.error("❌ Access Exception: This account node has been locked by the administration.")
+                                st.error("❌ Access Exception: This profile node has been locked by the administration.")
                             else:
                                 st.session_state.authenticated = True
                                 st.session_state.username = user_id
@@ -378,7 +378,7 @@ with tabs[0]:
 
             if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
                 if not from_address or not to_address or not auto_tracking:
-                    st.error("From Address, To Address, and valid target sequence scopes are mandatory variables.")
+                    st.error("From Address, To Address, and a valid Tracking ID range are mandatory.")
                 else:
                     st.session_state.web_queue.append({
                         "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
@@ -567,7 +567,7 @@ with tabs[2]:
                             st.rerun()
                 st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
 
-# --- TAB 4: ADMIN PANEL ---
+# --- TAB 4: REAL-TIME INTERACTIVE MODERATION CONTROL GRID (ADMIN PANEL) ---
 if current_user.lower() == "admin":
     with tabs[3]:
         with st.container(border=True):
@@ -577,49 +577,48 @@ if current_user.lower() == "admin":
             
             for uid, info in list(db["users"].items()):
                 if uid.lower() == "admin": 
-                    continue # Failsafe lock to secure the master control profile
+                    continue  # Failsafe immunity bypass lock to protect master control account container
                     
                 u_status = info.get("status", "active")
                 
-                # Render control panel horizontal row
                 adm_row = st.columns([0.32, 0.22, 0.23, 0.23])
                 with adm_row[0]:
                     st.markdown(f"**User ID:** `{uid}` | **Name:** {info.get('name','N/A')}")
-                    st.caption(f"📧 {info.get('email','N/A')} | 📱 {info.get('mobile','N/A')}")
+                    st.caption(f"📧 {info.get('email','N/A')} | 📱 {info.get('mobile','N/A')} | **State:** `{u_status.upper()}`")
                     
                 with adm_row[1]:
-                    # Action 1: Password reset trigger
+                    # 1. Reset Password Action Trigger Module
                     if st.button("🔑 Reset Password", key=f"adm_pwd_{uid}", use_container_width=True):
                         db["users"][uid]["password"] = "123456"
                         save_data(db)
-                        st.success(f"Password reset to '123456' for client node '{uid}'!")
-                        time.sleep(1)
+                        st.success(f"Password overridden to default '123456' for node code: {uid}")
+                        time.sleep(0.6)
                         st.rerun()
                         
                 with adm_row[2]:
-                    # Action 2: Dynamic status lock/unlock toggle switch triggers
+                    # 2. Lock/Unlock Security Access State Toggle Trigger Module
                     if u_status == "active":
                         if st.button("🔒 Lock User", key=f"adm_lock_{uid}", use_container_width=True):
                             db["users"][uid]["status"] = "locked"
                             save_data(db)
-                            st.warning(f"Client account container state locked: {uid}")
-                            time.sleep(1)
+                            st.warning(f"Client account access container locked: {uid}")
+                            time.sleep(0.6)
                             st.rerun()
                     else:
                         if st.button("🔓 Unlock User", key=f"adm_unl_{uid}", use_container_width=True):
                             db["users"][uid]["status"] = "active"
                             save_data(db)
-                            st.success(f"Client account container state unlocked: {uid}")
-                            time.sleep(1)
+                            st.success(f"Client account access container unlocked: {uid}")
+                            time.sleep(0.6)
                             st.rerun()
                             
                 with adm_row[3]:
-                    # Action 3: Permanent entry profile row database removal purge
+                    # 3. Permanent Account Node Database Erasure Purge Module
                     if st.button("🚨 Delete User", key=f"adm_del_{uid}", use_container_width=True):
                         del db["users"][uid]
                         save_data(db)
-                        st.error(f"Profile row container permanently dropped from server log entries: {uid}")
-                        time.sleep(1)
+                        st.error(f"Profile permanently deleted: {uid}")
+                        time.sleep(0.6)
                         st.rerun()
                         
                 st.markdown("<hr style='margin:12px 0; border-color:rgba(0,0,0,0.06);'>", unsafe_allow_html=True)
