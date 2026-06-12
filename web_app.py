@@ -47,6 +47,7 @@ def get_pool_key(article_type):
 
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
+    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
@@ -197,48 +198,60 @@ if 'clear_counter' not in st.session_state: st.session_state.clear_counter = 0
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
-    st.title("📮 India Post - Enterprise Web Portal")
-    auth_mode = st.radio("Access Control Node", ["Login to Existing Profile", "Register New Corporate Profile"])
-    
-    if auth_mode == "Login to Existing Profile":
-        st.subheader("Sign In")
-        user_id = st.text_input("User ID", key="login_uid").strip()
-        password = st.text_input("Password", type="password", key="login_pwd").strip()
-        if st.button("Verify & Enter Portal", type="primary"):
-            if not user_id or not password:
-                st.error("Please enter both User ID and Password fields.")
+    # Upgraded High-End Typography Header block 
+    st.markdown("""
+        <div style="text-align: left; margin-top: 15px; margin-bottom: 25px; font-family: 'Segoe UI', system-ui, sans-serif;">
+            <h1 style="color: #9c0000; font-size: 3.4rem; font-weight: 800; margin: 0; line-height: 1.1; letter-spacing: -0.5px;">India Post</h1>
+            <h2 style="color: #334155; font-size: 1.9rem; font-weight: 600; margin-top: 4px; margin-bottom: 8px; opacity: 0.95;">Enterprise Web Portal</h2>
+            <p style="color: #b45309; font-size: 0.95rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; margin: 0; opacity: 0.9;">Smart &bull; Secure &bull; Connected</p>
+        </div>
+        <hr style="border: 0; height: 1px; background: rgba(156, 0, 0, 0.15); margin-bottom: 30px;">
+    """, unsafe_allow_html=True)
+
+    auth_cols = st.columns([0.4, 0.6])
+    with auth_cols[0]:
+        with st.container(border=True):
+            auth_mode = st.radio("Access Control Node", ["Login to Existing Profile", "Register New Corporate Profile"])
+            
+            if auth_mode == "Login to Existing Profile":
+                st.markdown("<h4 style='color:#9c0000; margin-top:10px;'>🔐 Sign In</h4>", unsafe_allow_html=True)
+                user_id = st.text_input("User ID", key="login_uid").strip()
+                password = st.text_input("Password", type="password", key="login_pwd").strip()
+                if st.button("Verify & Enter Portal", type="primary", use_container_width=True):
+                    if not user_id or not password:
+                        st.error("Please enter both User ID and Password fields.")
+                    else:
+                        data = load_data()
+                        if user_id in data["users"] and data["users"][user_id]["password"] == password:
+                            st.session_state.authenticated = True
+                            st.session_state.username = user_id
+                            st.rerun()
+                        else:
+                            st.error("Invalid User ID or Password verification mismatch.")
+                            
             else:
-                data = load_data()
-                if user_id in data["users"] and data["users"][user_id]["password"] == password:
-                    st.session_state.authenticated = True
-                    st.session_state.username = user_id
-                    st.rerun()
-                else:
-                    st.error("Invalid User ID or Password verification mismatch.")
-                    
-    else:
-        st.subheader("Create Corporate Deployment Account")
-        reg_name = st.text_input("Full Name / Company Name").strip()
-        reg_email = st.text_input("Email ID").strip()
-        reg_mobile = st.text_input("Mobile Number").strip()
-        user_id = st.text_input("Create User ID", key="reg_uid").strip()
-        password = st.text_input("Create Password", type="password", key="reg_pwd").strip()
-        
-        if st.button("Register Infrastructure Profile", type="primary"):
-            if not reg_name or not reg_email or not reg_mobile or not user_id or not password:
-                st.error("All registration field inputs are mandatory values.")
-            else:
-                data = load_data()
-                if user_id in data["users"]:
-                    st.error("This User ID is already occupied.")
-                else:
-                    data["users"][user_id] = {
-                        "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
-                        "addresses": [], "used_barcodes": [], "generated_labels": [],
-                        "barcodes": {pool_key: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for pool_key in BARCODE_POOL_KEYS}
-                    }
-                    save_data(data)
-                    st.success("Registration success! Please log in.")
+                st.markdown("<h4 style='color:#9c0000; margin-top:10px;'>📝 Register Profile</h4>", unsafe_allow_html=True)
+                reg_name = st.text_input("Full Name / Company Name").strip()
+                reg_email = st.text_input("Email ID").strip()
+                reg_mobile = st.text_input("Mobile Number").strip()
+                user_id = st.text_input("Create User ID", key="reg_uid").strip()
+                password = st.text_input("Create Password", type="password", key="reg_pwd").strip()
+                
+                if st.button("Register Infrastructure Profile", type="primary", use_container_width=True):
+                    if not reg_name or not reg_email or not reg_mobile or not user_id or not password:
+                        st.error("All registration field inputs are mandatory values.")
+                    else:
+                        data = load_data()
+                        if user_id in data["users"]:
+                            st.error("This User ID is already occupied.")
+                        else:
+                            data["users"][user_id] = {
+                                "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
+                                "addresses": [], "used_barcodes": [], "generated_labels": [],
+                                "barcodes": {pool_key: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for pool_key in BARCODE_POOL_KEYS}
+                            }
+                            save_data(data)
+                            st.success("Registration success! Please log in.")
     st.stop()
 
 # --- ENTERPRISE INTERFACE DASHBOARD ---
@@ -250,14 +263,23 @@ if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
 if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
 if "barcodes" not in user_profile: user_profile["barcodes"] = {}
 
-# Failsafe backward compatibility tracker mapper migration
 for pk in BARCODE_POOL_KEYS:
     if pk not in user_profile["barcodes"]:
         user_profile["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
 
+# Unified top heading block inside the logged-in screen dashboard layout
+st.markdown("""
+    <div style="text-align: left; margin-top: 15px; margin-bottom: 20px; font-family: 'Segoe UI', system-ui, sans-serif;">
+        <h1 style="color: #9c0000; font-size: 3.2rem; font-weight: 800; margin: 0; line-height: 1.1;">India Post</h1>
+        <h2 style="color: #334155; font-size: 1.8rem; font-weight: 600; margin-top: 4px; margin-bottom: 6px;">Enterprise Workspace</h2>
+        <p style="color: #b45309; font-size: 0.9rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; margin: 0;">Smart &bull; Secure &bull; Connected</p>
+    </div>
+    <hr style="border: 0; height: 1px; background: rgba(156, 0, 0, 0.15); margin-bottom: 20px;">
+""", unsafe_allow_html=True)
+
 col_logout_wrap = st.columns([0.80, 0.20])
 with col_logout_wrap[0]:
-    st.markdown(f"<h3 style='margin:0; color:#4a0000;'>📋 Account Node: {user_profile.get('name', current_user)} | ID: `{current_user}`</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h4 style='margin:0; color:#1e293b; font-weight: 600;'>📋 Active Client: {user_profile.get('name', current_user)} | Node ID: `{current_user}`</h4>", unsafe_allow_html=True)
 with col_logout_wrap[1]:
     if st.button("Core Log Out", use_container_width=True):
         st.session_state.authenticated = False
@@ -288,273 +310,4 @@ with tabs[0]:
             from_address = st.text_area("Sender 'From' Address Details", value=selected_saved if selected_saved != "-- Select Profile --" else "")
             
             col_addr_actions = st.columns(2)
-            with col_addr_actions[0]:
-                if st.button("💾 Remember Address", use_container_width=True):
-                    if from_address and from_address not in user_profile["addresses"]:
-                        db["users"][current_user]["addresses"].append(from_address)
-                        save_data(db)
-                        st.success("Address profile recorded.")
-                        st.rerun()
-            with col_addr_actions[1]:
-                if st.button("🗑️ Delete Address", use_container_width=True):
-                    if selected_saved != "-- Select Profile --" and selected_saved in user_profile["addresses"]:
-                        db["users"][current_user]["addresses"].remove(selected_saved)
-                        save_data(db)
-                        st.warning("Address profile removed.")
-                        st.rerun()
-                    
-            to_address = st.text_area("Recipient 'To' Address Details", key=f"recipient_to_input_{st.session_state.clear_counter}")
-            article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
-            
-            cod_amount = ""
-            if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
-            customer_id = st.text_input("India Post Customer Business ID")
-            
-            st.write("**Volumetric Specifications (Optional)**")
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: weight = st.text_input("Weight (g)")
-            with col_m2: length = st.text_input("Len (cm)")
-            with col_m3: breadth = st.text_input("Wid (cm)")
-            with col_m4: height_metric = st.text_input("Hgt (cm)")
-                
-            col_mob1, col_mob2 = st.columns(2)
-            with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
-            with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)")
-
-            # --- DYNAMIC RESOLUTION LAYER ---
-            shared_pool_key = get_pool_key(article_type)
-            b_current = user_profile["barcodes"][shared_pool_key]
-            used_set = set(user_profile.get("used_barcodes", []))
-            queue_set = {item["tracking"] for item in st.session_state.web_queue}
-
-            if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
-                st.error(f"❌ Shared series empty! Configure ranges for: {shared_pool_key}")
-                auto_tracking = None
-            else:
-                current_serial_8 = int(b_current["current"])
-                auto_tracking = None
-                while current_serial_8 <= int(b_current["end"]):
-                    check_digit = calculate_upu_s10_check_digit(current_serial_8)
-                    test_tracking = f"{b_current['prefix']}{current_serial_8:08d}{check_digit}{b_current['suffix']}"
-                    if test_tracking not in used_set and test_tracking not in queue_set:
-                        auto_tracking = test_tracking
-                        break
-                    current_serial_8 += 1
-                
-                if auto_tracking:
-                    st.info(f"Next S10 Tracking ID: **{auto_tracking}**")
-                    b_current["current"] = current_serial_8
-                else:
-                    st.error("❌ Barcode Pool Depleted! Update configuration strings.")
-
-            if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
-                if not from_address or not to_address or not auto_tracking:
-                    st.error("From Address, To Address, and valid target sequence scopes are mandatory variables.")
-                else:
-                    st.session_state.web_queue.append({
-                        "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
-                        "cod": cod_amount, "cust_id": customer_id, 
-                        "weight": weight if weight else "", "length": length if length else "", 
-                        "breadth": breadth if breadth else "", "height": height_metric if height_metric else "", 
-                        "s_mob": s_mob if s_mob else "", "r_mob": r_mob if r_mob else ""
-                    })
-                    db["users"][current_user]["used_barcodes"].append(auto_tracking)
-                    db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
-                    save_data(db)
-                    
-                    st.session_state.clear_counter += 1
-                    st.success("Staged successfully into batch pipelines!")
-                    st.rerun()
-
-    with col_preview:
-        with st.container(border=True):
-            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⏳ Staged Processing Queue</h4>", unsafe_allow_html=True)
-            if st.session_state.web_queue:
-                display_df = pd.DataFrame(st.session_state.web_queue)[["tracking", "article", "weight", "cust_id"]]
-                st.dataframe(display_df, use_container_width=True)
-                if st.button("🗑️ Wipe Entire Active Session Queue"):
-                    st.session_state.web_queue = []
-                    st.rerun()
-                    
-                st.write("---")
-                st.subheader("Compile Outputs")
-                
-                if st.button("⚙️ Compile Label PDFs & Sync Template Matrix", type="primary"):
-                    pdf_pages = []
-                    template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
-                    if not os.path.exists(template_filename):
-                        st.error(f"CRITICAL: Template file missing at: {template_filename}")
-                    else:
-                        wb = openpyxl.load_workbook(template_filename)
-                        ws = wb.active
-                        next_row = ws.max_row + 1
-                        
-                        for idx, entry in enumerate(st.session_state.web_queue):
-                            lbl_canvas = draw_single_label(entry, width_in, height_in)
-                            pdf_pages.append(lbl_canvas)
-                            
-                            # --- EXCEL MANIFEST STRUCTURAL INJECTIONS ---
-                            ws.cell(row=next_row, column=1, value=idx + 1)
-                            ws.cell(row=next_row, column=2, value=entry['tracking'])
-                            ws.cell(row=next_row, column=3, value=entry['weight'])
-                            ws.cell(row=next_row, column=5, value=entry['length'])
-                            ws.cell(row=next_row, column=6, value=entry['breadth'])
-                            ws.cell(row=next_row, column=7, value=entry['height'])
-                            
-                            c_from = entry['from'].replace('\n', ', ')
-                            ws.cell(row=next_row, column=11, value=user_profile.get('name', current_user))
-                            ws.cell(row=next_row, column=13, value=c_from[:50])
-                            ws.cell(row=next_row, column=14, value=c_from[50:100])
-                            ws.cell(row=next_row, column=37, value=entry['s_mob'])
-                            
-                            c_to = entry['to'].replace('\n', ', ')
-                            ws.cell(row=next_row, column=22, value="CUSTOMER")
-                            ws.cell(row=next_row, column=24, value=c_to[:50])
-                            ws.cell(row=next_row, column=25, value=c_to[50:100])
-                            ws.cell(row=next_row, column=38, value=entry['r_mob'])
-                            
-                            if entry['cod']:
-                                ws.cell(row=next_row, column=41, value="TRUE")
-                                ws.cell(row=next_row, column=42, value=entry['cod'])
-                            next_row += 1
-                            
-                            user_profile["generated_labels"].append(entry)
-                            
-                        db["users"][current_user] = user_profile
-                        save_data(db)
-                        
-                        pdf_buffer = io.BytesIO()
-                        pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
-                        st.session_state.pdf_ready = pdf_buffer.getvalue()
-                        
-                        excel_buffer = io.BytesIO()
-                        wb.save(excel_buffer)
-                        st.session_state.excel_ready = excel_buffer.getvalue()
-                        st.session_state.web_queue = [] 
-                        st.success("Compilation complete! Web download links active.")
-                        st.rerun()
-            else:
-                st.info("The dispatch pipeline queue is currently clean.")
-
-            if 'pdf_ready' in st.session_state or 'excel_ready' in st.session_state:
-                st.write("---")
-                st.markdown("<h5 style='color:#9c0000; margin-top:0;'>📥 Generated Files Cache</h5>", unsafe_allow_html=True)
-                batch_timestamp = int(time.time())
-                
-                if 'pdf_ready' in st.session_state:
-                    st.download_button(label="📥 Download Consolidated Label PDF Bundle", data=st.session_state.pdf_ready, file_name=f"Compiled_Post_Labels_{batch_timestamp}.pdf", mime="application/pdf", use_container_width=True)
-                if 'excel_ready' in st.session_state:
-                    st.download_button(label="📥 Download Template Upload Ready Manifest", data=st.session_state.excel_ready, file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-                
-                if st.button("🧹 Clear Download Cache History", use_container_width=True):
-                    if 'pdf_ready' in st.session_state: del st.session_state.pdf_ready
-                    if 'excel_ready' in st.session_state: del st.session_state.excel_ready
-                    st.rerun()
-
-# --- TAB 2: RANGE ALLOCATION SETTINGS ---
-with tabs[1]:
-    with st.container(border=True):
-        st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⚙️ UPU S10 Barcode Range Setup</h4>", unsafe_allow_html=True)
-        set_article = st.selectbox("Choose Target Allocation Track Key", BARCODE_POOL_KEYS, key="setup_art")
-        b_data = user_profile["barcodes"][set_article]
-        
-        col_p, col_st, col_en, col_su = st.columns(4)
-        with col_p: new_prefix = st.text_input("Prefix (2 Alpha)", value=b_data["prefix"], max_chars=2).upper()
-        with col_st: new_start = st.number_input("Start Serial (8 Digits)", value=int(b_data["current"]), step=1)
-        with col_en: new_end = st.number_input("End Serial (8 Digits)", value=int(b_data["end"]), step=1)
-        with col_su: new_suffix = st.text_input("Suffix (2 Alpha)", value=b_data["suffix"], max_chars=2).upper()
-        
-        if st.button("Save System Range Allocation", type="primary"):
-            db["users"][current_user]["barcodes"][set_article] = { "prefix": new_prefix, "current": new_start, "end": new_end, "suffix": new_suffix }
-            save_data(db)
-            st.success(f"Configured range assignment arrays for {set_article}!")
-            st.rerun()
-            
-        remaining = b_data["end"] - b_data["current"]
-        st.metric(label="Available Unused Serials Remaining", value=f"{max(0, remaining + 1) if b_data['end'] > 0 else 0} Units")
-
-# --- TAB 3: PERMANENT ARCHIVE (GENERATED LABELS) ---
-with tabs[2]:
-    with st.container(border=True):
-        st.markdown("<h4 style='color:#9c0000; margin-top:0;'>📇 Permanent Generated Labels Registry</h4>", unsafe_allow_html=True)
-        st.write("Complete history log of all generated dispatches on this profile node.")
-        
-        archive = user_profile.get("generated_labels", [])
-        
-        if not archive:
-            st.info("No labels have been permanently generated on this profile node yet.")
-        else:
-            for idx, item in enumerate(reversed(archive)):
-                real_idx = len(archive) - 1 - idx
-                
-                row_cols = st.columns([0.5, 0.25, 0.25])
-                with row_cols[0]:
-                    st.write(f"**Barcode:** `{item['tracking']}` | **Type:** {item['article']}")
-                    st.caption(f"**Recipient:** {item['to'].splitlines()[0][:35]}...")
-                    
-                with row_cols[1]:
-                    lbl_canvas = draw_single_label(item, width_in if 'width_in' in locals() else 6.0, height_in if 'height_in' in locals() else 4.0)
-                    reprint_buf = io.BytesIO()
-                    lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
-                    st.download_button(
-                        label=f"🖨️ Reprint PDF",
-                        data=reprint_buf.getvalue(),
-                        file_name=f"Reprint_Label_{item['tracking']}.pdf",
-                        mime="application/pdf",
-                        key=f"rep_{item['tracking']}_{real_idx}"
-                    )
-                    
-                with row_cols[2]:
-                    if st.button(f"🗑️ Delete Record", key=f"del_init_{real_idx}"):
-                        st.session_state[f"confirm_prompt_{real_idx}"] = True
-                
-                if st.session_state.get(f"confirm_prompt_{real_idx}", False):
-                    st.markdown(f"❓ **Do you want to reuse barcode `{item['tracking']}` in your available range stock?**")
-                    choice_cols = st.columns([0.3, 0.3, 0.4])
-                    
-                    with choice_cols[0]:
-                        if st.button("Yes (Return to Range)", key=f"re_yes_{real_idx}"):
-                            if item['tracking'] in user_profile["used_barcodes"]:
-                                user_profile["used_barcodes"].remove(item['tracking'])
-                            user_profile["generated_labels"].pop(real_idx)
-                            db["users"][current_user] = user_profile
-                            save_data(db)
-                            del st.session_state[f"confirm_prompt_{real_idx}"]
-                            st.success(f"Barcode returned to range registry.")
-                            st.rerun()
-                            
-                    with choice_cols[1]:
-                        if st.button("No (Burn Barcode)", key=f"re_no_{real_idx}"):
-                            user_profile["generated_labels"].pop(real_idx)
-                            db["users"][current_user] = user_profile
-                            save_data(db)
-                            del st.session_state[f"confirm_prompt_{real_idx}"]
-                            st.warning(f"Barcode burned permanently from inventory.")
-                            st.rerun()
-                            
-                    with choice_cols[2]:
-                        if st.button("Cancel Operations", key=f"re_can_{real_idx}"):
-                            del st.session_state[f"confirm_prompt_{real_idx}"]
-                            st.rerun()
-                st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
-
-# --- TAB 4: ADMIN PANEL ---
-if current_user.lower() == "admin":
-    with tabs[3]:
-        with st.container(border=True):
-            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>👥 Registered User Directory</h4>", unsafe_allow_html=True)
-            user_records = []
-            for uid, info in db["users"].items():
-                if uid.lower() == "admin": continue
-                user_records.append({
-                    "User ID": uid, "Full Name": info.get("name", "N/A"),
-                    "Email ID": info.get("email", "N/A"), "Mobile": info.get("mobile", "N/A"),
-                    "Saved Profiles": len(info.get("addresses", []))
-                })
-            if user_records:
-                admin_df = pd.DataFrame(user_records)
-                st.dataframe(admin_df, use_container_width=True)
-                output_admin = io.BytesIO()
-                with pd.ExcelWriter(output_admin, engine='openpyxl') as writer:
-                    admin_df.to_excel(writer, index=False, sheet_name='Users')
-                st.download_button(label="📥 Export Client Directory to Excel", data=output_admin.getvalue(), file_name="Registered_Users_Directory.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            with col_addr_
