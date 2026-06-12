@@ -1,4 +1,4 @@
-import streamlit st
+import streamlit as st
 import openpyxl
 import os
 import sys
@@ -35,6 +35,7 @@ def save_data(data):
 
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
+    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
@@ -61,6 +62,11 @@ def wrap_text_to_pixels(text, draw, font, max_width):
                 current_line = word
         if current_line: lines.append(current_line)
     return '\n'.join(lines)
+
+# --- PREMIUM BASE64 IMAGE ENCODER ---
+def get_base64_image(image_path):
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
 
 # --- GENERATE SINGLE LABEL CANVAS HELPER ---
 def draw_single_label(entry, width_in, height_in):
@@ -155,13 +161,10 @@ def draw_single_label(entry, width_in, height_in):
         
     return lbl_canvas
 
-# --- STREAMLIT INITIALIZATION ---
-if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-if 'username' not in st.session_state: st.session_state.username = ""
-if 'web_queue' not in st.session_state: st.session_state.web_queue = []
-
 # --- PREMIUM BACKGROUND INJECTION ---
+st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
 bg_file_path = os.path.join(BASE_DIR, "background.png")
+
 if os.path.exists(bg_file_path):
     encoded_bg = get_base64_image(bg_file_path)
     st.markdown(f"""
@@ -174,6 +177,18 @@ if os.path.exists(bg_file_path):
             h1, h2, h3, p, span, label {{ color: #3a0000 !important; }}
         </style>
     """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+        <style>
+            .stApp { background-color: #fdfbf7; }
+            div.stButton > button[type="primary"] { background-color: #9c0000 !important; color: white !important; }
+        </style>
+    """, unsafe_allow_html=True)
+
+# --- STREAMLIT STATE INITIALIZATION ---
+if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+if 'username' not in st.session_state: st.session_state.username = ""
+if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -226,7 +241,6 @@ current_user = st.session_state.username
 db = load_data()
 user_profile = db["users"][current_user]
 
-# Failsafe profile upgrades for older data nodes
 if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
 if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
 
@@ -256,19 +270,16 @@ with tabs[2]:
     if not archive:
         st.info("No labels have been permanently generated on this profile node yet.")
     else:
-        # Loop through archive rows in reverse chronological order
         for idx, item in enumerate(reversed(archive)):
             real_idx = len(archive) - 1 - idx
             
-            # Layout configuration block card row
             row_cols = st.columns([0.5, 0.25, 0.25])
             with row_cols[0]:
                 st.write(f"**Barcode:** `{item['tracking']}` | **Type:** {item['article']}")
                 st.caption(f"**Recipient Summary:** {item['to'].splitlines()[0][:35]}...")
                 
             with row_cols[1]:
-                # Dynamic isolated single-reprint stream processing
-                lbl_canvas = draw_single_label(item, 4.0, 6.0) # Render standard printable sizes
+                lbl_canvas = draw_single_label(item, 6.0, 4.0)
                 reprint_buf = io.BytesIO()
                 lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
                 st.download_button(
@@ -283,211 +294,12 @@ with tabs[2]:
                 if st.button(f"🗑️ Delete Record", key=f"del_init_{real_idx}"):
                     st.session_state[f"confirm_prompt_{real_idx}"] = True
             
-            # Render context confirmation choices overlay if prompt variable flags true
             if st.session_state.get(f"confirm_prompt_{real_idx}", False):
                 st.markdown(f"❓ **Do you want to reuse barcode `{item['tracking']}` in your available range stock?**")
                 choice_cols = st.columns([0.3, 0.3, 0.4])
                 
                 with choice_cols[0]:
                     if st.button("Yes (Return to Range)", key=f"re_yes_{real_idx}"):
-                        # Strip sequence tracking records out from blocking memory ledger sets
                         if item['tracking'] in user_profile["used_barcodes"]:
                             user_profile["used_barcodes"].remove(item['tracking'])
-                        user_profile["generated_labels"].pop(real_idx)
-                        db["users"][current_user] = user_profile
-                        save_data(db)
-                        del st.session_state[f"confirm_prompt_{real_idx}"]
-                        st.success(f"Barcode returned to range registry.")
-                        st.rerun()
-                        
-                with choice_cols[1]:
-                    if st.button("No (Burn Barcode)", key=f"re_no_{real_idx}"):
-                        # Drop row registry information but leave tracking block locked inside consumed logs
-                        user_profile["generated_labels"].pop(real_idx)
-                        db["users"][current_user] = user_profile
-                        save_data(db)
-                        del st.session_state[f"confirm_prompt_{real_idx}"]
-                        st.warning(f"Barcode burned permanently from inventory.")
-                        st.rerun()
-                        
-                with choice_cols[2]:
-                    if st.button("Cancel Operations", key=f"re_can_{real_idx}"):
-                        del st.session_state[f"confirm_prompt_{real_idx}"]
-                        st.rerun()
-            st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
-
-# --- TAB 1: WORKSPACE DISPATCH MANAGER ---
-with tabs[0]:
-    col_inputs, col_preview = st.columns([0.48, 0.52])
-    
-    with col_inputs:
-        st.subheader("Shipment Properties")
-        col_w_in, col_h_in = st.columns(2)
-        with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
-        with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
-            
-        saved_addresses = user_profile.get("addresses", [])
-        selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses)
-        from_initial = selected_saved if selected_saved != "-- Select Profile --" else ""
-        from_address = st.text_area("Sender 'From' Address Details", value=from_initial)
-        
-        if st.button("💾 Remember This From Address"):
-            if from_address and from_address not in user_profile["addresses"]:
-                db["users"][current_user]["addresses"].append(from_address)
-                save_data(db)
-                st.success("Address profile recorded.")
-                st.rerun()
-                
-        to_address = st.text_area("Recipient 'To' Address Details")
-        article_type = st.selectbox("Postal Article Class", ARTICLE_TYPES, key="disp_art")
-        
-        cod_amount = ""
-        if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
-        customer_id = st.text_input("India Post Customer Business ID")
-        
-        st.write("**Volumetric Specifications (Optional)**")
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        with col_m1: weight = st.text_input("Weight (g)")
-        with col_m2: length = st.text_input("Len (cm)")
-        with col_m3: breadth = st.text_input("Wid (cm)")
-        with col_m4: v_height = st.text_input("Hgt (cm)")
-            
-        col_mob1, col_mob2 = st.columns(2)
-        with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
-        with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)")
-
-        b_current = user_profile["barcodes"][article_type]
-        used_set = set(user_profile.get("used_barcodes", []))
-        queue_set = {item["tracking"] for item in st.session_state.web_queue}
-
-        if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
-            st.error("❌ Selected Range empty! Set ranges in the Settings Tab.")
-            auto_tracking = None
-        else:
-            current_serial_8 = int(b_current["current"])
-            auto_tracking = None
-            while current_serial_8 <= int(b_current["end"]):
-                check_digit = calculate_upu_s10_check_digit(current_serial_8)
-                test_tracking = f"{b_current['prefix']}{current_serial_8:08d}{check_digit}{b_current['suffix']}"
-                if test_tracking not in used_set and test_tracking not in queue_set:
-                    auto_tracking = test_tracking
-                    break
-                current_serial_8 += 1
-            
-            if auto_tracking:
-                st.info(f"Next S10 Tracking ID: **{auto_tracking}**")
-                b_current["current"] = current_serial_8
-            else:
-                st.error("❌ Barcode Duplication Limit Hit! Update Settings.")
-
-        if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
-            if not from_address or not to_address or not auto_tracking:
-                st.error("From Address, To Address, and a valid Tracking ID range are mandatory.")
-            else:
-                st.session_state.web_queue.append({
-                    "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
-                    "cod": cod_amount, "cust_id": customer_id, 
-                    "weight": weight if weight else "", "length": length if length else "", 
-                    "breadth": breadth if breadth else "", "height": v_height if v_height else "", 
-                    "s_mob": s_mob if s_mob else "", "r_mob": r_mob if r_mob else ""
-                })
-                db["users"][current_user]["used_barcodes"].append(auto_tracking)
-                db["users"][current_user]["barcodes"][article_type]["current"] = b_current["current"] + 1
-                save_data(db)
-                st.success("Staged successfully!")
-                st.rerun()
-
-    with col_preview:
-        st.subheader("Staged Processing Queue")
-        if st.session_state.web_queue:
-            display_df = pd.DataFrame(st.session_state.web_queue)[["tracking", "article", "weight", "cust_id"]]
-            st.dataframe(display_df, use_container_width=True)
-            if st.button("🗑️ Wipe Entire Active Session Queue"):
-                st.session_state.web_queue = []
-                st.rerun()
-                
-            st.write("---")
-            st.subheader("Compile Outputs")
-            
-            if st.button("⚙️ Compile Label PDFs & Sync Template Matrix", type="primary"):
-                pdf_pages = []
-                template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
-                if not os.path.exists(template_filename):
-                    st.error(f"CRITICAL: Template file missing at: {template_filename}")
-                else:
-                    wb = openpyxl.load_workbook(template_filename)
-                    ws = wb.active
-                    next_row = ws.max_row + 1
-                    
-                    for idx, entry in enumerate(st.session_state.web_queue):
-                        lbl_canvas = draw_single_label(entry, width_in, height_in)
-                        pdf_pages.append(lbl_canvas)
-                        
-                        # --- EXCEL DATA INJECTIONS ---
-                        ws.cell(row=next_row, column=1, value=idx + 1)
-                        ws.cell(row=next_row, column=2, value=entry['tracking'])
-                        ws.cell(row=next_row, column=3, value=entry['weight'])
-                        ws.cell(row=next_row, column=5, value=entry['length'])
-                        ws.cell(row=next_row, column=6, value=entry['breadth'])
-                        ws.cell(row=next_row, column=7, value=entry['height'])
-                        
-                        c_from = entry['from'].replace('\n', ', ')
-                        ws.cell(row=next_row, column=11, value=user_profile.get('name', current_user))
-                        ws.cell(row=next_row, column=13, value=c_from[:50])
-                        ws.cell(row=next_row, column=14, value=c_from[50:100])
-                        ws.cell(row=next_row, column=37, value=entry['s_mob'])
-                        
-                        c_to = entry['to'].replace('\n', ', ')
-                        ws.cell(row=next_row, column=22, value="CUSTOMER")
-                        ws.cell(row=next_row, column=24, value=c_to[:50])
-                        ws.cell(row=next_row, column=25, value=c_to[50:100])
-                        ws.cell(row=next_row, column=38, value=entry['r_mob'])
-                        
-                        if entry['cod']:
-                            ws.cell(row=next_row, column=41, value="TRUE")
-                            ws.cell(row=next_row, column=42, value=entry['cod'])
-                        next_row += 1
-                        
-                        # Commit copy to permanent archive sequence lists
-                        user_profile["generated_labels"].append(entry)
-                        
-                    # Save updated structural matrices data targets
-                    db["users"][current_user] = user_profile
-                    save_data(db)
-                    
-                    pdf_buffer = io.BytesIO()
-                    pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
-                    st.session_state.pdf_ready = pdf_buffer.getvalue()
-                    
-                    excel_buffer = io.BytesIO()
-                    wb.save(excel_buffer)
-                    st.session_state.excel_ready = excel_buffer.getvalue()
-                    st.session_state.web_queue = [] # Auto-flush queue on execution success
-                    st.success("Compilation complete! Web download links active.")
-                    st.rerun()
-
-            batch_timestamp = int(time.time())
-            if 'pdf_ready' in st.session_state:
-                st.download_button(label="📥 Download Consolidated Label PDF Bundle", data=st.session_state.pdf_ready, file_name=f"Compiled_Post_Labels_{batch_timestamp}.pdf", mime="application/pdf", use_container_width=True)
-            if 'excel_ready' in st.session_state:
-                st.download_button(label="📥 Download Template Upload Ready Manifest", data=st.session_state.excel_ready, file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        else:
-            st.info("The dispatch pipeline queue is currently clean.")
-
-# --- TAB 2: RANGE ALLOCATION SETTINGS ---
-with tabs[1]:
-    st.header("UPU S10 Barcode Range Setup")
-    set_article = st.selectbox("Choose Article Classification", ARTICLE_TYPES, key="setup_art")
-    b_data = user_profile["barcodes"][set_article]
-    col_p, col_st, col_en, col_su = st.columns(4)
-    with col_p: new_prefix = st.text_input("Prefix (2 Alpha)", value=b_data["prefix"], max_chars=2).upper()
-    with col_st: new_start = st.number_input("Start Serial (8 Digits)", value=int(b_data["current"]), step=1)
-    with col_en: new_end = st.number_input("End Serial (8 Digits)", value=int(b_data["end"]), step=1)
-    with col_su: new_suffix = st.text_input("Suffix (2 Alpha)", value=b_data["suffix"], max_chars=2).upper()
-    if st.button("Save System Range Allocation", type="primary"):
-        db["users"][current_user]["barcodes"][set_article] = { "prefix": new_prefix, "current": new_start, "end": new_end, "suffix": new_suffix }
-        save_data(db)
-        st.success("Tracking ranges configured!")
-        st.rerun()
-    remaining = b_data["end"] - b_data["current"]
-    st.metric(label="Available Unused Serials Remaining", value=f"{max(0, remaining + 1) if b_data['end'] > 0 else 0} Units")
+                        user_profile
