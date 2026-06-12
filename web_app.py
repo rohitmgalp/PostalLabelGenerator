@@ -56,7 +56,8 @@ def wrap_text_to_pixels(text, draw, font, max_width):
             test_line = current_line + " " + word if current_line else word
             bbox = draw.textbbox((0, 0), test_line, font=font)
             w = bbox[2] - bbox[0]
-            if w <= max_width: current_line = test_line
+            if w <= max_width: 
+                current_line = test_line
             else:
                 if current_line: lines.append(current_line)
                 current_line = word
@@ -210,4 +211,126 @@ if not st.session_state.authenticated:
         reg_name = st.text_input("Full Name / Company Name").strip()
         reg_email = st.text_input("Email ID").strip()
         reg_mobile = st.text_input("Mobile Number").strip()
-        user_id = st.text_input("Create User ID", key="reg
+        user_id = st.text_input("Create User ID", key="reg_uid").strip()
+        password = st.text_input("Create Password", type="password", key="reg_pwd").strip()
+        
+        if st.button("Register Infrastructure Profile", type="primary"):
+            if not reg_name or not reg_email or not reg_mobile or not user_id or not password:
+                st.error("All registration field inputs are mandatory values.")
+            else:
+                data = load_data()
+                if user_id in data["users"]:
+                    st.error("This User ID is already occupied.")
+                else:
+                    data["users"][user_id] = {
+                        "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
+                        "addresses": [], "used_barcodes": [], "generated_labels": [],
+                        "barcodes": {atype: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for atype in ARTICLE_TYPES}
+                    }
+                    save_data(data)
+                    st.success("Registration success! Please log in.")
+    st.stop()
+
+# --- ENTERPRISE INTERFACE DASHBOARD ---
+current_user = st.session_state.username
+db = load_data()
+user_profile = db["users"][current_user]
+
+if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
+if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
+
+# Clean Header Context Row
+col_logout_wrap = st.columns([0.80, 0.20])
+with col_logout_wrap[0]:
+    st.markdown(f"<h4 style='margin:0;'>📋 Account Node: {user_profile.get('name', current_user)} | ID: `{current_user}`</h4>", unsafe_allow_html=True)
+with col_logout_wrap[1]:
+    if st.button("Core Log Out", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.username = ""
+        st.session_state.web_queue = []
+        st.rerun()
+
+tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 Generated Labels"]
+if current_user.lower() == "admin": 
+    tabs_list.append("👥 Admin Panel")
+tabs = st.tabs(tabs_list)
+
+# --- TAB 1: DISPATCH MANAGER ---
+with tabs[0]:
+    col_inputs, col_preview = st.columns([0.48, 0.52])
+    
+    with col_inputs:
+        with st.container(border=True):
+            st.subheader("Shipment Properties")
+            col_w_in, col_h_in = st.columns(2)
+            with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
+            with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
+                
+            saved_addresses = user_profile.get("addresses", [])
+            selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses)
+            from_initial = selected_saved if selected_saved != "-- Select Profile --" else ""
+            from_address = st.text_area("Sender 'From' Address Details", value=from_initial)
+            
+            if st.button("💾 Remember This From Address"):
+                if from_address and from_address not in user_profile["addresses"]:
+                    db["users"][current_user]["addresses"].append(from_address)
+                    save_data(db)
+                    st.success("Address profile recorded.")
+                    st.rerun()
+                    
+            to_address = st.text_area("Recipient 'To' Address Details")
+            article_type = st.selectbox("Postal Article Class", ARTICLE_TYPES, key="disp_art")
+            
+            cod_amount = ""
+            if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
+            customer_id = st.text_input("India Post Customer Business ID")
+            
+            st.write("**Volumetric Specifications (Optional)**")
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1: weight = st.text_input("Weight (g)")
+            with col_m2: length = st.text_input("Len (cm)")
+            with col_m3: breadth = st.text_input("Wid (cm)")
+            with col_m4: v_height = st.text_input("Hgt (cm)")
+                
+            col_mob1, col_mob2 = st.columns(2)
+            with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
+            with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)")
+
+            b_current = user_profile["barcodes"][article_type]
+            used_set = set(user_profile.get("used_barcodes", []))
+            queue_set = {item["tracking"] for item in st.session_state.web_queue}
+
+            if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
+                st.error("❌ Selected Range empty! Set ranges in the Settings Tab.")
+                auto_tracking = None
+            else:
+                current_serial_8 = int(b_current["current"])
+                auto_tracking = None
+                while current_serial_8 <= int(b_current["end"]):
+                    check_digit = calculate_upu_s10_check_digit(current_serial_8)
+                    test_tracking = f"{b_current['prefix']}{current_serial_8:08d}{check_digit}{b_current['suffix']}"
+                    if test_tracking not in used_set and test_tracking not in queue_set:
+                        auto_tracking = test_tracking
+                        break
+                    current_serial_8 += 1
+                
+                if auto_tracking:
+                    st.info(f"Next S10 Tracking ID: **{auto_tracking}**")
+                    b_current["current"] = current_serial_8
+                else:
+                    st.error("❌ Barcode Duplication Limit Hit! Update Settings.")
+
+            if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
+                if not from_address or not to_address or not auto_tracking:
+                    st.error("From Address, To Address, and a valid Tracking ID range are mandatory.")
+                else:
+                    st.session_state.web_queue.append({
+                        "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
+                        "cod": cod_amount, "cust_id": customer_id, 
+                        "weight": weight if weight else "", "length": length if length else "", 
+                        "breadth": breadth if breadth else "", "height": v_height if v_height else "", 
+                        "s_mob": s_mob if s_mob else "", "r_mob": r_mob if r_mob else ""
+                    })
+                    db["users"][current_user]["used_barcodes"].append(auto_tracking)
+                    db["users"][current_user]["barcodes"][article_type]["current"] = b_current["current"] + 1
+                    save_data
