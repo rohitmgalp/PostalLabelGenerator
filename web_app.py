@@ -15,11 +15,18 @@ from PIL import Image, ImageDraw, ImageFont
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "web_postal_data.json")
 
-ARTICLE_TYPES = [
+DISPATCH_ARTICLES = [
     "Speed Post Parcel", 
     "Indiapost Parcel Retail", 
     "Business Parcel", 
     "Speed Post Parcel COD", 
+    "Business Parcel COD"
+]
+
+BARCODE_POOL_KEYS = [
+    "Speed Post Parcel (Regular & COD Shared Pool)",
+    "Indiapost Parcel Retail",
+    "Business Parcel",
     "Business Parcel COD"
 ]
 
@@ -33,9 +40,13 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
+def get_pool_key(article_type):
+    if article_type in ["Speed Post Parcel", "Speed Post Parcel COD"]:
+        return "Speed Post Parcel (Regular & COD Shared Pool)"
+    return article_type
+
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
-    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
@@ -224,7 +235,7 @@ if not st.session_state.authenticated:
                     data["users"][user_id] = {
                         "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
                         "addresses": [], "used_barcodes": [], "generated_labels": [],
-                        "barcodes": {atype: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for atype in ARTICLE_TYPES}
+                        "barcodes": {pool_key: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for pool_key in BARCODE_POOL_KEYS}
                     }
                     save_data(data)
                     st.success("Registration success! Please log in.")
@@ -237,8 +248,13 @@ user_profile = db["users"][current_user]
 
 if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
 if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
+if "barcodes" not in user_profile: user_profile["barcodes"] = {}
 
-# Clean Header Context Row
+# Failsafe backward compatibility tracker mapper migration
+for pk in BARCODE_POOL_KEYS:
+    if pk not in user_profile["barcodes"]:
+        user_profile["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
+
 col_logout_wrap = st.columns([0.80, 0.20])
 with col_logout_wrap[0]:
     st.markdown(f"<h3 style='margin:0; color:#4a0000;'>📋 Account Node: {user_profile.get('name', current_user)} | ID: `{current_user}`</h3>", unsafe_allow_html=True)
@@ -287,10 +303,8 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            # --- DYNAMIC RECIPIENT KEY BINDING TRACKER ---
-            # Appending clear_counter forces Streamlit to regenerate a clean widget whenever the counter updates
             to_address = st.text_area("Recipient 'To' Address Details", key=f"recipient_to_input_{st.session_state.clear_counter}")
-            article_type = st.selectbox("Postal Article Class", ARTICLE_TYPES, key="disp_art")
+            article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
             cod_amount = ""
             if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
@@ -307,12 +321,14 @@ with tabs[0]:
             with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
             with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)")
 
-            b_current = user_profile["barcodes"][article_type]
+            # --- DYNAMIC RESOLUTION LAYER ---
+            shared_pool_key = get_pool_key(article_type)
+            b_current = user_profile["barcodes"][shared_pool_key]
             used_set = set(user_profile.get("used_barcodes", []))
             queue_set = {item["tracking"] for item in st.session_state.web_queue}
 
             if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
-                st.error("❌ Selected Range empty! Set ranges in the Settings Tab.")
+                st.error(f"❌ Shared series empty! Configure ranges for: {shared_pool_key}")
                 auto_tracking = None
             else:
                 current_serial_8 = int(b_current["current"])
@@ -329,11 +345,11 @@ with tabs[0]:
                     st.info(f"Next S10 Tracking ID: **{auto_tracking}**")
                     b_current["current"] = current_serial_8
                 else:
-                    st.error("❌ Barcode Duplication Hit! Update Settings.")
+                    st.error("❌ Barcode Pool Depleted! Update configuration strings.")
 
             if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
                 if not from_address or not to_address or not auto_tracking:
-                    st.error("From Address, To Address, and a valid Tracking ID range are mandatory.")
+                    st.error("From Address, To Address, and valid target sequence scopes are mandatory variables.")
                 else:
                     st.session_state.web_queue.append({
                         "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
@@ -343,12 +359,11 @@ with tabs[0]:
                         "s_mob": s_mob if s_mob else "", "r_mob": r_mob if r_mob else ""
                     })
                     db["users"][current_user]["used_barcodes"].append(auto_tracking)
-                    db["users"][current_user]["barcodes"][article_type]["current"] = b_current["current"] + 1
+                    db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Increment counter to force-clear the text widget state natively
                     st.session_state.clear_counter += 1
-                    st.success("Staged successfully!")
+                    st.success("Staged successfully into batch pipelines!")
                     st.rerun()
 
     with col_preview:
@@ -378,7 +393,7 @@ with tabs[0]:
                             lbl_canvas = draw_single_label(entry, width_in, height_in)
                             pdf_pages.append(lbl_canvas)
                             
-                            # --- EXCEL DATA INJECTIONS ---
+                            # --- EXCEL MANIFEST STRUCTURAL INJECTIONS ---
                             ws.cell(row=next_row, column=1, value=idx + 1)
                             ws.cell(row=next_row, column=2, value=entry['tracking'])
                             ws.cell(row=next_row, column=3, value=entry['weight'])
@@ -421,7 +436,6 @@ with tabs[0]:
             else:
                 st.info("The dispatch pipeline queue is currently clean.")
 
-            # --- PERSISTENT OUTPUT ACTIONS LOG BLOCK ---
             if 'pdf_ready' in st.session_state or 'excel_ready' in st.session_state:
                 st.write("---")
                 st.markdown("<h5 style='color:#9c0000; margin-top:0;'>📥 Generated Files Cache</h5>", unsafe_allow_html=True)
@@ -441,18 +455,21 @@ with tabs[0]:
 with tabs[1]:
     with st.container(border=True):
         st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⚙️ UPU S10 Barcode Range Setup</h4>", unsafe_allow_html=True)
-        set_article = st.selectbox("Choose Article Classification", ARTICLE_TYPES, key="setup_art")
+        set_article = st.selectbox("Choose Target Allocation Track Key", BARCODE_POOL_KEYS, key="setup_art")
         b_data = user_profile["barcodes"][set_article]
+        
         col_p, col_st, col_en, col_su = st.columns(4)
         with col_p: new_prefix = st.text_input("Prefix (2 Alpha)", value=b_data["prefix"], max_chars=2).upper()
         with col_st: new_start = st.number_input("Start Serial (8 Digits)", value=int(b_data["current"]), step=1)
         with col_en: new_end = st.number_input("End Serial (8 Digits)", value=int(b_data["end"]), step=1)
         with col_su: new_suffix = st.text_input("Suffix (2 Alpha)", value=b_data["suffix"], max_chars=2).upper()
+        
         if st.button("Save System Range Allocation", type="primary"):
             db["users"][current_user]["barcodes"][set_article] = { "prefix": new_prefix, "current": new_start, "end": new_end, "suffix": new_suffix }
             save_data(db)
-            st.success("Tracking ranges configured!")
+            st.success(f"Configured range assignment arrays for {set_article}!")
             st.rerun()
+            
         remaining = b_data["end"] - b_data["current"]
         st.metric(label="Available Unused Serials Remaining", value=f"{max(0, remaining + 1) if b_data['end'] > 0 else 0} Units")
 
