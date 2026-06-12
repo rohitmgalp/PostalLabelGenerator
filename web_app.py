@@ -161,27 +161,19 @@ def draw_single_label(entry, width_in, height_in):
         
     return lbl_canvas
 
-# --- PREMIUM BACKGROUND INJECTION ---
-st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
+# --- THEME STYLING INJECTION ---
 bg_file_path = os.path.join(BASE_DIR, "background.png")
-
 if os.path.exists(bg_file_path):
     encoded_bg = get_base64_image(bg_file_path)
     st.markdown(f"""
         <style>
             .stApp {{ background-image: url("data:image/png;base64,{encoded_bg}"); background-size: cover; background-position: center; background-attachment: fixed; }}
-            div[data-testid="stColumn"] {{ background-color: rgba(255, 255, 255, 0.92); padding: 30px !important; border-radius: 15px !important; box-shadow: 0 4px 15px rgba(156, 0, 0, 0.05); border: 1px solid rgba(226, 220, 208, 0.6); }}
+            div[data-testid="stHeader"] {{ background: transparent !important; }}
+            .stTabs {{ background: rgba(255, 255, 255, 0.88) !important; padding: 20px !important; border-radius: 12px !important; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }}
             .stTextInput input, .stTextArea textarea, .stSelectbox div {{ border-color: #e2dcd0 !important; background-color: #ffffff !important; color: #2b2b2b !important; }}
             div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
             div.stButton > button[type="primary"]:hover {{ background-color: #bd0000 !important; }}
-            h1, h2, h3, p, span, label {{ color: #3a0000 !important; }}
-        </style>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-        <style>
-            .stApp { background-color: #fdfbf7; }
-            div.stButton > button[type="primary"] { background-color: #9c0000 !important; color: white !important; }
+            h1, h2, h3, h4, p, span, label {{ color: #4a0000 !important; }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -244,10 +236,10 @@ user_profile = db["users"][current_user]
 if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
 if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
 
-st.title("📮 India Post Enterprise Workspace")
-st.caption(f"Client Node: **{user_profile.get('name', current_user)}** | ID: `{current_user}`")
-
-col_logout_wrap = st.columns([0.85, 0.15])
+# Clean Header Context Row (Low profile to prevent clashing with the wallpaper background text)
+col_logout_wrap = st.columns([0.80, 0.20])
+with col_logout_wrap[0]:
+    st.markdown(f"<h4 style='margin:0;'>📋 Account Node: {user_profile.get('name', current_user)} | ID: `{current_user}`</h4>", unsafe_allow_html=True)
 with col_logout_wrap[1]:
     if st.button("Core Log Out", use_container_width=True):
         st.session_state.authenticated = False
@@ -260,46 +252,39 @@ if current_user.lower() == "admin":
     tabs_list.append("👥 Admin Panel")
 tabs = st.tabs(tabs_list)
 
-# --- TAB 3: PERMANENT ARCHIVE (GENERATED LABELS) ---
-with tabs[2]:
-    st.header("📇 Permanent Generated Labels Registry")
-    st.write("Complete operational history ledger across all system print allocations.")
+# --- TAB 1: DISPATCH MANAGER ---
+with tabs[0]:
+    col_inputs, col_preview = st.columns([0.48, 0.52])
     
-    archive = user_profile.get("generated_labels", [])
-    
-    if not archive:
-        st.info("No labels have been permanently generated on this profile node yet.")
-    else:
-        for idx, item in enumerate(reversed(archive)):
-            real_idx = len(archive) - 1 - idx
+    with col_inputs:
+        with st.container(border=True):
+            st.subheader("Shipment Properties")
+            col_w_in, col_h_in = st.columns(2)
+            with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
+            with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
+                
+            saved_addresses = user_profile.get("addresses", [])
+            selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses)
+            from_initial = selected_saved if selected_saved != "-- Select Profile --" else ""
+            from_address = st.text_area("Sender 'From' Address Details", value=from_initial)
             
-            row_cols = st.columns([0.5, 0.25, 0.25])
-            with row_cols[0]:
-                st.write(f"**Barcode:** `{item['tracking']}` | **Type:** {item['article']}")
-                st.caption(f"**Recipient Summary:** {item['to'].splitlines()[0][:35]}...")
-                
-            with row_cols[1]:
-                lbl_canvas = draw_single_label(item, 6.0, 4.0)
-                reprint_buf = io.BytesIO()
-                lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
-                st.download_button(
-                    label=f"🖨️ Reprint PDF",
-                    data=reprint_buf.getvalue(),
-                    file_name=f"Reprint_Label_{item['tracking']}.pdf",
-                    mime="application/pdf",
-                    key=f"rep_{item['tracking']}_{real_idx}"
-                )
-                
-            with row_cols[2]:
-                if st.button(f"🗑️ Delete Record", key=f"del_init_{real_idx}"):
-                    st.session_state[f"confirm_prompt_{real_idx}"] = True
+            if st.button("💾 Remember This From Address"):
+                if from_address and from_address not in user_profile["addresses"]:
+                    db["users"][current_user]["addresses"].append(from_address)
+                    save_data(db)
+                    st.success("Address profile recorded.")
+                    st.rerun()
+                    
+            to_address = st.text_area("Recipient 'To' Address Details")
+            article_type = st.selectbox("Postal Article Class", ARTICLE_TYPES, key="disp_art")
             
-            if st.session_state.get(f"confirm_prompt_{real_idx}", False):
-                st.markdown(f"❓ **Do you want to reuse barcode `{item['tracking']}` in your available range stock?**")
-                choice_cols = st.columns([0.3, 0.3, 0.4])
-                
-                with choice_cols[0]:
-                    if st.button("Yes (Return to Range)", key=f"re_yes_{real_idx}"):
-                        if item['tracking'] in user_profile["used_barcodes"]:
-                            user_profile["used_barcodes"].remove(item['tracking'])
-                        user_profile
+            cod_amount = ""
+            if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
+            customer_id = st.text_input("India Post Customer Business ID")
+            
+            st.write("**Volumetric Specifications (Optional)**")
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1: weight = st.text_input("Weight (g)")
+            with col_m2: length = st.text_input("Len (cm)")
+            with col_m3: breadth = st.text_input("Wid (cm)")
+            with col_m4: v_
