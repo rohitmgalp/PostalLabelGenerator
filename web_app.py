@@ -198,14 +198,13 @@ if 'clear_counter' not in st.session_state: st.session_state.clear_counter = 0
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
-    # Upgraded High-End Typography Header block 
     st.markdown("""
         <div style="text-align: left; margin-top: 15px; margin-bottom: 25px; font-family: 'Segoe UI', system-ui, sans-serif;">
             <h1 style="color: #9c0000; font-size: 3.4rem; font-weight: 800; margin: 0; line-height: 1.1; letter-spacing: -0.5px;">India Post</h1>
             <h2 style="color: #334155; font-size: 1.9rem; font-weight: 600; margin-top: 4px; margin-bottom: 8px; opacity: 0.95;">Enterprise Web Portal</h2>
             <p style="color: #b45309; font-size: 0.95rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; margin: 0; opacity: 0.9;">Smart &bull; Secure &bull; Connected</p>
         </div>
-        <hr style="border: 0; height: 1px; background: rgba(156, 0, 0, 0.15); margin-bottom: 30px;">
+        <div style="height: 1px; background: rgba(156, 0, 0, 0.15); margin-bottom: 30px;"></div>
     """, unsafe_allow_html=True)
 
     auth_cols = st.columns([0.4, 0.6])
@@ -267,14 +266,13 @@ for pk in BARCODE_POOL_KEYS:
     if pk not in user_profile["barcodes"]:
         user_profile["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
 
-# Unified top heading block inside the logged-in screen dashboard layout
 st.markdown("""
     <div style="text-align: left; margin-top: 15px; margin-bottom: 20px; font-family: 'Segoe UI', system-ui, sans-serif;">
         <h1 style="color: #9c0000; font-size: 3.2rem; font-weight: 800; margin: 0; line-height: 1.1;">India Post</h1>
         <h2 style="color: #334155; font-size: 1.8rem; font-weight: 600; margin-top: 4px; margin-bottom: 6px;">Enterprise Workspace</h2>
         <p style="color: #b45309; font-size: 0.9rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; margin: 0;">Smart &bull; Secure &bull; Connected</p>
     </div>
-    <hr style="border: 0; height: 1px; background: rgba(156, 0, 0, 0.15); margin-bottom: 20px;">
+    <div style="height: 1px; background: rgba(156, 0, 0, 0.15); margin-bottom: 20px;"></div>
 """, unsafe_allow_html=True)
 
 col_logout_wrap = st.columns([0.80, 0.20])
@@ -310,4 +308,19 @@ with tabs[0]:
             from_address = st.text_area("Sender 'From' Address Details", value=selected_saved if selected_saved != "-- Select Profile --" else "")
             
             col_addr_actions = st.columns(2)
-            with col_addr_
+            with col_addr_actions[0]:
+                if st.button("💾 Remember Address", use_container_width=True):
+                    if from_address and from_address not in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].append(from_address)
+                        save_data(db)
+                        st.success("Address profile recorded.")
+                        st.rerun()
+            with col_addr_actions[1]:
+                if st.button("🗑️ Delete Address", use_container_width=True):
+                    if selected_saved != "-- Select Profile --" and selected_saved in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].remove(selected_saved)
+                        save_data(db)
+                        st.warning("Address profile removed.")
+                        st.rerun()
+                    
+            to_address = st.text_area("Recipient 'To' Address Details", key=f"
