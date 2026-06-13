@@ -9,6 +9,7 @@ import base64
 import re
 import requests
 import pandas as pd
+import barcode
 from barcode import Code128
 from barcode.writer import ImageWriter
 from PIL import Image, ImageDraw, ImageFont
@@ -44,7 +45,6 @@ def load_data():
             data = json.loads(content)
             if not isinstance(data, dict): return default_db
             
-            # This completely eliminates KeyErrors. It forces the structure to exist.
             if "users" not in data: data["users"] = {}
             if "messages" not in data: data["messages"] = []
             
@@ -162,9 +162,9 @@ def draw_single_label(entry, width_in, height_in):
     tracking_code = str(entry.get('tracking', '0000000000000'))
     article_type = str(entry.get('article', 'ARTICLE'))
     
-    Code128 = barcode.get_barcode_class('code128')
+    Code128_class = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
-    my_barcode = Code128(tracking_code, writer=ImageWriter())
+    my_barcode = Code128_class(tracking_code, writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
     bc_buffer.seek(0)
     bc_img = Image.open(bc_buffer)
@@ -342,7 +342,6 @@ def execute_stage(tracking, article, pool_key, current_serial):
     current_u = st.session_state.username
     db = load_data()
     
-    # Failsafe if user was deleted mid-session
     if current_u not in db["users"]:
         st.session_state.stage_err = "Critical Error: User profile missing. Please log out."
         return
@@ -604,7 +603,6 @@ with tabs[0]:
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
                                 if lbl_canvas: pdf_pages.append(lbl_canvas)
                                 
-                                # OFFLINE CSV SECURE LOOKUP
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                                 if not r_pin_clean:
                                     r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
@@ -619,7 +617,6 @@ with tabs[0]:
                                 if not isinstance(s_pin_details, dict): s_pin_details = {}
                                 _, s_l1, s_l2, _ = split_address_to_lines(entry.get('from', ''))
                                 
-                                # EXCEL INJECTIONS
                                 ws.cell(row=next_row, column=1, value=idx + 1)
                                 ws.cell(row=next_row, column=2, value=entry.get('tracking', ''))
                                 ws.cell(row=next_row, column=3, value=safe_numeric(entry.get('weight', '')))
