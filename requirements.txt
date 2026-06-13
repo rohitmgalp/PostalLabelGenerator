@@ -1,4 +1,5 @@
-openpyxl
+streamlit
 pandas
+openpyxl
 python-barcode
-pillow
+Pillow
