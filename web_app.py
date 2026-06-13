@@ -8,7 +8,7 @@ import io
 import base64
 import re
 import pandas as pd
-from barcode import Code128
+import barcode
 from barcode.writer import ImageWriter
 from PIL import Image, ImageDraw, ImageFont
 
@@ -48,7 +48,6 @@ def get_pool_key(article_type):
 
 # --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
-    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
     weights = [8, 6, 4, 2, 3, 5, 9, 7]
@@ -105,7 +104,6 @@ def load_pincode_database_records():
         df = pd.read_csv(csv_path, usecols=['pincode', 'district', 'statename'], dtype={'pincode': str})
         df.columns = [c.lower().strip() for c in df.columns]
         df['pincode'] = df['pincode'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        
         # Select the first row if a pincode maps to duplicate rows in the directory dataset
         df_unique = df.drop_duplicates(subset=['pincode'], keep='first')
         return df_unique.set_index('pincode').to_dict(orient='index')
@@ -149,6 +147,8 @@ def draw_single_label(entry, width_in, height_in):
     H_px = int(height_in * DPI)
     m_px = int(W_px * 0.05)
     
+    # Modern Barcode generation syntax
+    Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
     my_barcode = Code128(entry['tracking'], writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
@@ -298,37 +298,40 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# --- SAFE MEMORY STATE HOLDERS ---
-if 's_from_val' not in st.session_state: st.session_state.s_from_val = ""
-if 's_mob_val' not in st.session_state: st.session_state.s_mob_val = ""
-if 'r_to_val' not in st.session_state: st.session_state.r_to_val = ""
-if 'r_mob_val' not in st.session_state: st.session_state.r_mob_val = ""
-if 'r_pin_val' not in st.session_state: st.session_state.r_pin_val = ""
+# Ensure decoupled state holds values to prevent API update conflicts
+if "s_addr_input" not in st.session_state: st.session_state.s_addr_input = ""
+if "r_addr_input" not in st.session_state: st.session_state.r_addr_input = ""
+if "auto_s_mob" not in st.session_state: st.session_state.auto_s_mob = ""
+if "auto_r_mob" not in st.session_state: st.session_state.auto_r_mob = ""
+if "auto_r_pin" not in st.session_state: st.session_state.auto_r_pin = ""
 
 # Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
 
-# --- ATOMIC REACTION ACTION LISTENERS ---
+# --- CALLBACK FUNCTIONS ---
+def update_sender_data():
+    text = st.session_state.s_addr_widget
+    st.session_state.s_addr_input = text
+    _, mob = extract_pincode_and_mobile(text)
+    if mob:
+        st.session_state.auto_s_mob = mob
+
+def update_recipient_data():
+    text = st.session_state.r_addr_widget
+    st.session_state.r_addr_input = text
+    pin, mob = extract_pincode_and_mobile(text)
+    if pin:
+        st.session_state.auto_r_pin = pin
+    if mob:
+        st.session_state.auto_r_mob = mob
+
 def handle_quick_load_address_profile():
     choice = st.session_state.address_quick_selector
     if choice != "-- Select Profile --":
-        st.session_state.s_from_val = choice
-        _, ext_s_mobile = extract_pincode_and_mobile(choice)
-        st.session_state.s_mob_val = ext_s_mobile if ext_s_mobile else ""
-
-def sync_sender_address_data():
-    txt = st.session_state.from_address_input_widget
-    st.session_state.s_from_val = txt
-    _, ext_s_mobile = extract_pincode_and_mobile(txt)
-    if ext_s_mobile:
-        st.session_state.s_mob_val = ext_s_mobile
-
-def sync_recipient_address_data():
-    txt = st.session_state.to_address_input_widget
-    st.session_state.r_to_val = txt
-    ext_r_pincode, ext_r_mobile = extract_pincode_and_mobile(txt)
-    st.session_state.r_pin_val = ext_r_pincode
-    st.session_state.r_mob_val = ext_r_mobile
+        st.session_state.s_addr_input = choice
+        _, mob = extract_pincode_and_mobile(choice)
+        if mob:
+            st.session_state.auto_s_mob = mob
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -434,8 +437,8 @@ with tabs[0]:
             saved_addresses = user_profile.get("addresses", [])
             selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="address_quick_selector", on_change=handle_quick_load_address_profile)
             
-            # Pure decoupled stationary field layout
-            from_address = st.text_area("Sender 'From' Address Details", value=st.session_state.s_from_val, key="from_address_input_widget", on_change=sync_sender_address_data)
+            # Using independent widget keys connected to backend callbacks
+            from_address = st.text_area("Sender 'From' Address Details", value=st.session_state.s_addr_input, key="s_addr_widget", on_change=update_sender_data)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
@@ -453,7 +456,7 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details", value=st.session_state.r_to_val, key="to_address_input_widget", on_change=sync_recipient_address_data)
+            to_address = st.text_area("Recipient 'To' Address Details", value=st.session_state.r_addr_input, key="r_addr_widget", on_change=update_recipient_data)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
@@ -470,13 +473,13 @@ with tabs[0]:
                 
             col_mob1, col_mob2 = st.columns(2)
             with col_mob1: 
-                s_mob = st.text_input("Sender Mobile (Optional)", value=st.session_state.s_mob_val, key="s_mob_field")
+                s_mob = st.text_input("Sender Mobile (Optional)", value=st.session_state.auto_s_mob)
             with col_mob2: 
-                r_mob = st.text_input("Receiver Mobile (Optional)", value=st.session_state.r_mob_val, key="r_mob_field")
+                r_mob = st.text_input("Receiver Mobile (Optional)", value=st.session_state.auto_r_mob)
                 
             col_pin1, col_pin2 = st.columns(2)
             with col_pin1:
-                pin_code = st.text_input("Extracted Pincode (Optional)", value=st.session_state.r_pin_val, key="r_pin_field")
+                pin_code = st.text_input("Extracted Pincode (Optional)", value=st.session_state.auto_r_pin)
             with col_pin2:
                 st.write("")
 
@@ -520,10 +523,10 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Direct value stream wipe clears the view instantly on reload
-                    st.session_state.r_to_val = ""
-                    st.session_state.r_mob_val = ""
-                    st.session_state.r_pin_val = ""
+                    # Complete UI reset
+                    st.session_state.r_addr_input = ""
+                    st.session_state.auto_r_mob = ""
+                    st.session_state.auto_r_pin = ""
                     st.success("Staged successfully into batch pipelines!")
                     st.rerun()
 
@@ -558,8 +561,8 @@ with tabs[0]:
                             pdf_pages.append(lbl_canvas)
                             
                             # --- AUTOMATED DATABASE LOOKUPS ---
-                            r_pin = str(entry.get('pincode', '')).strip().split('.')[0]
-                            r_pin_details = pincode_lookup_db.get(r_pin, {"district": "", "statename": ""})
+                            r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
+                            r_pin_details = pincode_lookup_db.get(r_pin_clean, {"district": "", "statename": ""})
                             r_name, r_l1, _, _ = split_address_to_lines(entry['to'])
                             
                             s_pin, _ = extract_pincode_and_mobile(entry['from'])
@@ -567,43 +570,43 @@ with tabs[0]:
                             s_pin_details = pincode_lookup_db.get(s_pin_clean, {"district": "", "statename": ""})
                             _, s_l1, s_l2, _ = split_address_to_lines(entry['from'])
                             
-                            # --- CORE SPREADSHEET CELL MATRIX EXACT ALPHANUMERIC COLUMN INJECTIONS ---
+                            # --- CORE SPREADSHEET CELL MATRIX INJECTIONS ---
                             ws.cell(row=next_row, column=1, value=idx + 1)                                       # A: SERIAL NUMBER
                             ws.cell(row=next_row, column=2, value=entry['tracking'])                             # B: BARCODE NO
-                            ws.cell(row=next_row, column=3, value=safe_numeric(entry['weight']))                 # C: PHYSICAL WEIGHT [Forced Numeric]
-                            ws.cell(row=next_row, column=4, value="FALSE")                                       # D: REG [Rule 1]
-                            ws.cell(row=next_row, column=5, value="FALSE")                                       # E: OTP [Rule 1]
-                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))             # F: RECEIVER CITY [Rule 2]
-                            ws.cell(row=next_row, column=7, value=r_pin)                                         # G: RECEIVER PINCODE
+                            ws.cell(row=next_row, column=3, value=safe_numeric(entry['weight']))                 # C: PHYSICAL WEIGHT 
+                            ws.cell(row=next_row, column=4, value="FALSE")                                       # D: REG 
+                            ws.cell(row=next_row, column=5, value="FALSE")                                       # E: OTP 
+                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))             # F: RECEIVER CITY
+                            ws.cell(row=next_row, column=7, value=r_pin_clean)                                   # G: RECEIVER PINCODE
                             ws.cell(row=next_row, column=8, value=r_name)                                        # H: RECEIVER NAME
                             ws.cell(row=next_row, column=9, value=r_l1)                                          # I: RECEIVER ADD LINE 1
-                            ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))            # J: RECEIVER ADD LINE 2 [Rule 3]
-                            ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))           # K: RECEIVER ADD LINE 3 [Rule 3]
-                            ws.cell(row=next_row, column=12, value="FALSE")                                      # L: ACK [Rule 4]
+                            ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))            # J: RECEIVER ADD LINE 2 
+                            ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))           # K: RECEIVER ADD LINE 3 
+                            ws.cell(row=next_row, column=12, value="FALSE")                                      # L: ACK 
                             ws.cell(row=next_row, column=13, value=entry['s_mob'])                               # M: SENDER MOBILE NO
                             ws.cell(row=next_row, column=14, value=entry['r_mob'])                               # N: RECEIVER MOBILE NO
                             
                             if "COD" in entry['article']:
-                                ws.cell(row=next_row, column=17, value="COD")                              # Q: CODR/COD flag
+                                ws.cell(row=next_row, column=17, value="COD")                                    # Q: CODR/COD flag
                                 ws.cell(row=next_row, column=18, value=safe_numeric(entry['cod']))               # R: VALUE FOR CODR/COD
                                 
-                            ws.cell(row=next_row, column=21, value="NROL")                                       # U: SHAPE OF ARTICLE [Rule 5]
-                            ws.cell(row=next_row, column=22, value=safe_numeric(entry['length']))                # V: LENGTH [Forced Numeric]
-                            ws.cell(row=next_row, column=23, value=safe_numeric(entry['breadth']))               # W: BREADTH/DIAMETER [Forced Numeric]
-                            ws.cell(row=next_row, column=24, value=safe_numeric(entry['height']))                # X: HEIGHT [Forced Numeric]
-                            ws.cell(row=next_row, column=25, value="FALSE")                                      # Y: PRIORITY FLAG [Rule 6]
+                            ws.cell(row=next_row, column=21, value="NROL")                                       # U: SHAPE OF ARTICLE 
+                            ws.cell(row=next_row, column=22, value=safe_numeric(entry['length']))                # V: LENGTH 
+                            ws.cell(row=next_row, column=23, value=safe_numeric(entry['breadth']))               # W: BREADTH/DIAMETER 
+                            ws.cell(row=next_row, column=24, value=safe_numeric(entry['height']))                # X: HEIGHT 
+                            ws.cell(row=next_row, column=25, value="FALSE")                                      # Y: PRIORITY FLAG 
                             
                             ws.cell(row=next_row, column=29, value=user_profile.get('name', current_user))       # AC: SENDER NAME
-                            ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))            # AE: SENDER CITY [Rule 7]
-                            ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))           # AF: SENDER STATE/UT [Rule 7]
+                            ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))            # AE: SENDER CITY
+                            ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))           # AF: SENDER STATE/UT
                             ws.cell(row=next_row, column=33, value=s_pin_clean)                                  # AG: SENDER PINCODE
-                            ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))           # AM: RECEIVER STATE/UT [Rule 8]
-                            ws.cell(row=next_row, column=44, value="FALSE")                                      # AR: ALT ADDRESS FLAG [Rule 9]
-                            ws.cell(row=next_row, column=45, value="RMGK REF")                                   # AS: BULK REFERENCE [Rule 10]
+                            ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))           # AM: RECEIVER STATE/UT 
+                            ws.cell(row=next_row, column=44, value="FALSE")                                      # AR: ALT ADDRESS FLAG 
+                            ws.cell(row=next_row, column=45, value="RMGK REF")                                   # AS: BULK REFERENCE 
                             
                             ws.cell(row=next_row, column=46, value=s_l1)                                         # AT: SENDER ADD LINE 1
                             ws.cell(row=next_row, column=47, value=s_l2)                                         # AU: SENDER ADD LINE 2
-                            ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))           # AV: SENDER ADD LINE 3 [Rule 11]
+                            ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))           # AV: SENDER ADD LINE 3 
                             
                             next_row += 1
                             user_profile["generated_labels"].append(entry)
