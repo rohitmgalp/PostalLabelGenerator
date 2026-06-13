@@ -146,11 +146,10 @@ def draw_single_label(entry, width_in, height_in):
     tracking_code = str(entry.get('tracking', '0000000000000'))
     article_type = str(entry.get('article', 'ARTICLE'))
     
-    Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
-    my_barcode = Code128(tracking_code, writer=ImageWriter())
-    my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
-    bc_buffer.seek(0)
+my_barcode = Code128(tracking_code, writer=ImageWriter())
+my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
+bc_buffer.seek(0)
     bc_img = Image.open(bc_buffer)
     
     lbl_canvas = Image.new('RGB', (W_px, H_px), color='white')
