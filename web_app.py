@@ -7,9 +7,8 @@ import time
 import io
 import base64
 import re
-import requests
 import pandas as pd
-import barcode
+from barcode import Code128
 from barcode.writer import ImageWriter
 from PIL import Image, ImageDraw, ImageFont
 
@@ -83,65 +82,30 @@ def extract_pincode_and_mobile(text):
     for chunk in chunks:
         digits_only = chunk.replace('+', '')
         if len(digits_only) == 6: pincode = digits_only
-        elif len(digits_only) == 10: mobile = digits_only
-        elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
+        elif len(digits_only) in [10, 11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF LIVE API WEB SCRAPER ---
+# --- BULLETPROOF OFFLINE PINCODE CSV LOADER ---
 @st.cache_data(show_spinner=False)
-def fetch_live_pincode_data(pin_code_str):
-    """Hits postal API with fallback to web scraping. Fully wrapped to prevent crashes."""
-    fallback_res = {"district": "", "statename": ""}
+def load_pincode_database_records():
+    csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
+    if not os.path.exists(csv_path): return {}
     
-    if not pin_code_str: return fallback_res
-    pin = str(pin_code_str).strip()
-    if len(pin) != 6 or not pin.isdigit(): return fallback_res
-    
-    # ATTEMPT 1: Official Postal API
     try:
-        url = f"https://api.postalpincode.in/pincode/{pin}"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, list) and len(data) > 0:
-                first_item = data[0]
-                if isinstance(first_item, dict) and first_item.get("Status") == "Success":
-                    post_offices = first_item.get("PostOffice")
-                    if isinstance(post_offices, list) and len(post_offices) > 0:
-                        office = post_offices[0]
-                        if isinstance(office, dict):
-                            return {
-                                "district": str(office.get("District", "")).upper(),
-                                "statename": str(office.get("State", "")).upper()
-                            }
-    except Exception:
-        pass 
+        df = pd.read_csv(csv_path, dtype=str)
+        # Force strict lowercase and strip spaces to map headers accurately
+        df.columns = [str(c).lower().strip() for c in df.columns]
         
-    # ATTEMPT 2: Pincode.net.in Scraper Fallback
-    try:
-        url = f"https://pincode.net.in/{pin}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            html = response.text
-            district, state = "", ""
+        if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns:
+            return {}
             
-            try:
-                d_match = re.search(r'District[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
-                if d_match is not None: district = d_match.group(1).strip().upper()
-            except Exception: pass
-                
-            try:
-                s_match = re.search(r'State[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
-                if s_match is not None: state = s_match.group(1).strip().upper()
-            except Exception: pass
-                
-            if district or state:
-                return {"district": district, "statename": state}
+        df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        df = df[df['pincode'] != ""] 
+        
+        df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
+        return df_unique.set_index('pincode').to_dict(orient='index')
     except Exception:
-        pass 
-
-    return fallback_res
+        return {}
 
 # --- EXCEL EXPORT NUMERIC FORMAT FORCING CONVERTER ---
 def safe_numeric(val):
@@ -176,9 +140,8 @@ def draw_single_label(entry, width_in, height_in):
     H_px = int(height_in * DPI)
     m_px = int(W_px * 0.05)
     
-    Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
-    my_barcode = Code128(entry['tracking'], writer=ImageWriter())
+    my_barcode = Code128(str(entry['tracking']), writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
     bc_buffer.seek(0)
     bc_img = Image.open(bc_buffer)
@@ -334,14 +297,14 @@ for key in default_keys:
         st.session_state[key] = "" if key != "load_profile_dd" else "-- Select Profile --"
         if key == "clear_requested": st.session_state[key] = False
 
-# --- PRE-RENDER CLEAR FLAG (Fixes StreamlitAPIException) ---
+# Load Master Pincode Dictionary into Memory Cache
+pincode_lookup_db = load_pincode_database_records()
+
+# --- PRE-RENDER CLEAR FLAG (Fixes StreamlitAPIException and PRESERVES Sender Data) ---
 if st.session_state.clear_requested:
-    st.session_state.s_addr_val = ""
     st.session_state.r_addr_val = ""
-    st.session_state.s_mob_val = ""
     st.session_state.r_mob_val = ""
     st.session_state.r_pin_val = ""
-    st.session_state.load_profile_dd = "-- Select Profile --"
     st.session_state.clear_requested = False
 
 # --- ACTION CALLBACKS ---
@@ -418,6 +381,12 @@ if not st.session_state.authenticated:
                             st.success("Success! Please log in.")
     st.stop()
 
+# --- SIDEBAR DIAGNOSTICS ---
+if pincode_lookup_db:
+    st.sidebar.success(f"✅ Secure CSV Database Loaded: **{len(pincode_lookup_db)}** routes active.")
+else:
+    st.sidebar.error("⚠️ CSV Pincode Database NOT loaded! Ensure 'all_india_pincode_directory_2025.csv' is uploaded and correctly formatted.")
+
 # --- DASHBOARD ---
 current_user = st.session_state.username
 db = load_data()
@@ -477,7 +446,6 @@ with tabs[0]:
                         st.rerun()
                     
             st.text_area("Recipient 'To' Address Details", key="r_addr_val", on_change=parse_recipient_action)
-            
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
             cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)") if "COD" in article_type else ""
             customer_id = st.text_input("India Post Customer Business ID")
@@ -537,9 +505,8 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Instead of clearing instantly, set the flag and rerun
                     st.session_state.clear_requested = True
-                    st.success("Staged successfully!")
+                    st.success("Staged successfully! Ready for the next recipient.")
                     st.rerun()
 
     with col_preview:
@@ -562,7 +529,7 @@ with tabs[0]:
                     if not os.path.exists(template_filename):
                         st.error("CRITICAL: Master template tracking sheet asset missing from directory.")
                     else:
-                        with st.spinner("Fetching live web pincode data and compiling manifests..."):
+                        with st.spinner("Executing secure local database compilation..."):
                             pdf_pages = []
                             wb = openpyxl.load_workbook(template_filename)
                             ws = wb.active
@@ -572,17 +539,21 @@ with tabs[0]:
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
                                 pdf_pages.append(lbl_canvas)
                                 
-                                # SAFE LIVE FETCHING
+                                # --- SECURE LOCAL CSV LOOKUP ---
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                                 if not r_pin_clean:
                                     r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
                                     r_pin_clean = str(r_pin_clean).strip().split('.')[0]
-                                r_pin_details = fetch_live_pincode_data(r_pin_clean)
+                                    
+                                r_pin_details = pincode_lookup_db.get(r_pin_clean)
+                                if not isinstance(r_pin_details, dict): r_pin_details = {}
                                 r_name, r_l1, _, _ = split_address_to_lines(entry.get('to', ''))
                                 
                                 s_pin, _ = extract_pincode_and_mobile(entry.get('from', ''))
                                 s_pin_clean = str(s_pin).strip().split('.')[0]
-                                s_pin_details = fetch_live_pincode_data(s_pin_clean)
+                                
+                                s_pin_details = pincode_lookup_db.get(s_pin_clean)
+                                if not isinstance(s_pin_details, dict): s_pin_details = {}
                                 _, s_l1, s_l2, _ = split_address_to_lines(entry.get('from', ''))
                                 
                                 # EXCEL INJECTIONS
@@ -591,12 +562,12 @@ with tabs[0]:
                                 ws.cell(row=next_row, column=3, value=safe_numeric(entry.get('weight', '')))
                                 ws.cell(row=next_row, column=4, value="FALSE")
                                 ws.cell(row=next_row, column=5, value="FALSE")
-                                ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))
+                                ws.cell(row=next_row, column=6, value=str(r_pin_details.get('district', '')).upper())
                                 ws.cell(row=next_row, column=7, value=r_pin_clean)
                                 ws.cell(row=next_row, column=8, value=r_name)
                                 ws.cell(row=next_row, column=9, value=r_l1)
-                                ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))
-                                ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))
+                                ws.cell(row=next_row, column=10, value=str(r_pin_details.get('district', '')).upper())
+                                ws.cell(row=next_row, column=11, value=str(r_pin_details.get('statename', '')).upper())
                                 ws.cell(row=next_row, column=12, value="FALSE")
                                 ws.cell(row=next_row, column=13, value=entry.get('s_mob', ''))
                                 ws.cell(row=next_row, column=14, value=entry.get('r_mob', ''))
@@ -611,15 +582,15 @@ with tabs[0]:
                                 ws.cell(row=next_row, column=24, value=safe_numeric(entry.get('height', '')))
                                 ws.cell(row=next_row, column=25, value="FALSE")
                                 ws.cell(row=next_row, column=29, value=user_profile.get('name', current_user))
-                                ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))
-                                ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))
+                                ws.cell(row=next_row, column=31, value=str(s_pin_details.get('district', '')).upper())
+                                ws.cell(row=next_row, column=32, value=str(s_pin_details.get('statename', '')).upper())
                                 ws.cell(row=next_row, column=33, value=s_pin_clean)
-                                ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))
+                                ws.cell(row=next_row, column=39, value=str(r_pin_details.get('statename', '')).upper())
                                 ws.cell(row=next_row, column=44, value="FALSE")
                                 ws.cell(row=next_row, column=45, value="RMGK REF")
                                 ws.cell(row=next_row, column=46, value=s_l1)
                                 ws.cell(row=next_row, column=47, value=s_l2)
-                                ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))
+                                ws.cell(row=next_row, column=48, value=str(s_pin_details.get('statename', '')).upper())
                                 
                                 next_row += 1
                                 user_profile["generated_labels"].append(entry)
