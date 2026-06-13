@@ -93,7 +93,7 @@ def extract_pincode_and_mobile(text):
         elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF PINCODE CSV LOADER ---
+# --- BULLETPROOF OFFLINE CSV LOADER ---
 @st.cache_data(show_spinner=False)
 def load_pincode_database_records():
     csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
@@ -101,14 +101,12 @@ def load_pincode_database_records():
     try:
         df = pd.read_csv(csv_path, dtype=str)
         df.columns = [str(c).lower().strip() for c in df.columns]
-        if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns:
-            return {}
+        if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns: return {}
         df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df = df[df['pincode'] != ""] 
         df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
         return df_unique.set_index('pincode').to_dict(orient='index')
-    except Exception:
-        return {}
+    except Exception: return {}
 
 def safe_numeric(val):
     if val is None: return None
@@ -133,7 +131,7 @@ def split_address_to_lines(address_text):
         l3 = flat[140:190]
     return name, l1, l2, l3
 
-# --- GENERATE SINGLE LABEL CANVAS HELPER ---
+# --- LABEL GENERATOR ---
 def draw_single_label(entry, width_in, height_in):
     DPI = 300
     W_px = int(width_in * DPI)
@@ -278,74 +276,81 @@ else:
         {whatsapp_html}
     """, unsafe_allow_html=True)
 
-# --- STRICT STATE INIT & DYNAMIC ARCHITECTURE KEYS ---
+# --- STRICT SESSION STATE INIT ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# Core Counters for bypassing the API Exception rule
-if 's_id' not in st.session_state: st.session_state.s_id = 0
-if 'r_id' not in st.session_state: st.session_state.r_id = 0
+# Initialize Core Fields at Top-Level to Prevent ALL KeyErrors
+core_keys = [
+    "s_addr", "s_mob", "r_addr", "r_mob", "r_pin", 
+    "w", "l", "b", "h", "cod", "cust", "load_profile_dd"
+]
+for k in core_keys:
+    if k not in st.session_state:
+        st.session_state[k] = "" if k != "load_profile_dd" else "-- Select Profile --"
 
 if 'stage_err' not in st.session_state: st.session_state.stage_err = ""
 if 'stage_succ' not in st.session_state: st.session_state.stage_succ = ""
 
-# --- THE GOLD STANDARD: BACKGROUND CALLBACKS ---
+# --- SAFE CALLBACKS (NO KEY MODIFICATION) ---
 def s_addr_changed():
-    sid = st.session_state.s_id
-    addr = st.session_state.get(f"s_addr_{sid}", "")
+    addr = st.session_state.s_addr
     _, mob = extract_pincode_and_mobile(addr)
-    if mob: st.session_state[f"s_mob_{sid}"] = mob
+    if mob: st.session_state.s_mob = mob
 
 def r_addr_changed():
-    rid = st.session_state.r_id
-    addr = st.session_state.get(f"r_addr_{rid}", "")
+    addr = st.session_state.r_addr
     pin, mob = extract_pincode_and_mobile(addr)
-    if pin: st.session_state[f"r_pin_{rid}"] = pin
-    if mob: st.session_state[f"r_mob_{rid}"] = mob
+    if pin: st.session_state.r_pin = pin
+    if mob: st.session_state.r_mob = mob
 
 def load_profile():
     choice = st.session_state.load_profile_dd
     if choice != "-- Select Profile --":
-        # Pushing to a new Sender ID ensures safe population without cache crash
-        st.session_state.s_id += 1
-        new_sid = st.session_state.s_id
-        st.session_state[f"s_addr_{new_sid}"] = choice
+        st.session_state.s_addr = choice
         _, mob = extract_pincode_and_mobile(choice)
-        if mob: st.session_state[f"s_mob_{new_sid}"] = mob
+        if mob: st.session_state.s_mob = mob
 
-def execute_stage(tracking, article, pkey, serial):
-    sid = st.session_state.s_id
-    rid = st.session_state.r_id
-    
-    from_val = st.session_state.get(f"s_addr_{sid}", "").strip()
-    to_val = st.session_state.get(f"r_addr_{rid}", "").strip()
+def execute_stage(tracking, article, pool_key, current_serial):
+    from_val = st.session_state.s_addr.strip()
+    to_val = st.session_state.r_addr.strip()
     
     if not from_val or not to_val or not tracking:
         st.session_state.stage_err = "From Address, To Address, and Tracking ID are mandatory."
         return
         
+    # Using .get() for optional fields prevents KeyError if condition hid them
     st.session_state.web_queue.append({
         "tracking": tracking, "from": from_val, "to": to_val, "article": article,
-        "cod": st.session_state.get(f"cod_{rid}", "").strip(),
-        "cust_id": st.session_state.get("cust_shared", "").strip(),
-        "weight": st.session_state.get(f"w_{rid}", "").strip(),
-        "length": st.session_state.get(f"l_{rid}", "").strip(),
-        "breadth": st.session_state.get(f"b_{rid}", "").strip(),
-        "height": st.session_state.get(f"h_{rid}", "").strip(),
-        "s_mob": st.session_state.get(f"s_mob_{sid}", "").strip(),
-        "r_mob": st.session_state.get(f"r_mob_{rid}", "").strip(),
-        "pincode": st.session_state.get(f"r_pin_{rid}", "").strip()
+        "cod": st.session_state.get("cod", "").strip() if "COD" in article else "",
+        "cust_id": st.session_state.get("cust", "").strip(),
+        "weight": st.session_state.get("w", "").strip(),
+        "length": st.session_state.get("l", "").strip(),
+        "breadth": st.session_state.get("b", "").strip(),
+        "height": st.session_state.get("h", "").strip(),
+        "s_mob": st.session_state.s_mob.strip(),
+        "r_mob": st.session_state.r_mob.strip(),
+        "pincode": st.session_state.r_pin.strip()
     })
     
     current_u = st.session_state.username
     db = load_data()
     db["users"][current_u]["used_barcodes"].append(tracking)
-    db["users"][current_u]["barcodes"][pkey]["current"] = serial + 1
+    db["users"][current_u]["barcodes"][pool_key]["current"] = current_serial + 1
     save_data(db)
     
-    # MAGIC: Instantly clears recipient fields by rolling the ID forward, ignoring the old values entirely!
-    st.session_state.r_id += 1 
+    # MAGIC: Instantly clears recipient fields inside the safe callback zone!
+    st.session_state.r_addr = ""
+    st.session_state.r_mob = ""
+    st.session_state.r_pin = ""
+    if "w" in st.session_state: st.session_state.w = ""
+    if "l" in st.session_state: st.session_state.l = ""
+    if "b" in st.session_state: st.session_state.b = ""
+    if "h" in st.session_state: st.session_state.h = ""
+    if "cod" in st.session_state: st.session_state.cod = ""
+    if "cust" in st.session_state: st.session_state.cust = ""
+    
     st.session_state.stage_succ = "Staged successfully! Ready for the next recipient."
 
 # Load Database Cache
@@ -473,17 +478,16 @@ with tabs[0]:
             with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
             with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
             
-            # --- DYNAMIC SENDER COMPARTMENT ---
-            s_id = st.session_state.s_id
             saved_addresses = user_profile.get("addresses", [])
             st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile)
             
-            st.text_area("Sender 'From' Address Details", key=f"s_addr_{s_id}", on_change=s_addr_changed)
+            # --- SENDER ---
+            st.text_area("Sender 'From' Address Details", key="s_addr", on_change=s_addr_changed)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
                 if st.button("💾 Remember Address", use_container_width=True):
-                    val = st.session_state.get(f"s_addr_{s_id}", "").strip()
+                    val = st.session_state.s_addr.strip()
                     if val and val not in user_profile["addresses"]:
                         db["users"][current_user]["addresses"].append(val)
                         save_data(db)
@@ -499,28 +503,28 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
             
-            # --- DYNAMIC RECIPIENT COMPARTMENT ---
-            r_id = st.session_state.r_id
-            st.text_area("Recipient 'To' Address Details", key=f"r_addr_{r_id}", on_change=r_addr_changed)
+            # --- RECEIVER ---
+            st.text_area("Recipient 'To' Address Details", key="r_addr", on_change=r_addr_changed)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
             
-            if "COD" in article_type: st.text_input("Collect on Delivery (COD) Amount (₹)", key=f"cod_{r_id}")
-            st.text_input("India Post Customer Business ID", key="cust_shared")
+            if "COD" in article_type: 
+                st.text_input("Collect on Delivery (COD) Amount (₹)", key="cod")
+            st.text_input("India Post Customer Business ID", key="cust")
             
             st.write("**Volumetric Specifications (Optional)**")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: st.text_input("Weight (g)", key=f"w_{r_id}")
-            with col_m2: st.text_input("Len (cm)", key=f"l_{r_id}")
-            with col_m3: st.text_input("Wid (cm)", key=f"b_{r_id}")
-            with col_m4: st.text_input("Hgt (cm)", key=f"h_{r_id}")
+            with col_m1: st.text_input("Weight (g)", key="w")
+            with col_m2: st.text_input("Len (cm)", key="l")
+            with col_m3: st.text_input("Wid (cm)", key="b")
+            with col_m4: st.text_input("Hgt (cm)", key="h")
                 
             col_mob1, col_mob2 = st.columns(2)
-            with col_mob1: st.text_input("Sender Mobile (Optional)", key=f"s_mob_{s_id}")
-            with col_mob2: st.text_input("Receiver Mobile (Optional)", key=f"r_mob_{r_id}")
+            with col_mob1: st.text_input("Sender Mobile (Optional)", key="s_mob")
+            with col_mob2: st.text_input("Receiver Mobile (Optional)", key="r_mob")
                 
             col_pin1, col_pin2 = st.columns(2)
-            with col_pin1: st.text_input("Extracted Pincode (Optional)", key=f"r_pin_{r_id}")
+            with col_pin1: st.text_input("Extracted Pincode (Optional)", key="r_pin")
             with col_pin2: st.write("")
 
             shared_pool_key = get_pool_key(article_type)
@@ -800,8 +804,10 @@ if current_user.lower() == "admin":
                     st.error("Message cannot be blank.")
                     
             st.markdown("---")
+            
             col_msg_head1, col_msg_head2 = st.columns([0.75, 0.25])
-            with col_msg_head1: st.markdown("### 📥 User Replies & History")
+            with col_msg_head1:
+                st.markdown("### 📥 User Replies & History")
             with col_msg_head2:
                 if st.button("🗑️ Clear All History", type="primary"):
                     db["messages"] = []
