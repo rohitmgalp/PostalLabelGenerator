@@ -7,6 +7,7 @@ import time
 import io
 import base64
 import re
+import requests
 import pandas as pd
 from barcode import Code128
 from barcode.writer import ImageWriter
@@ -32,8 +33,12 @@ BARCODE_POOL_KEYS = [
 ]
 
 def load_data():
-    if not os.path.exists(DATA_FILE): return {"users": {}}
-    with open(DATA_FILE, "r") as f: return json.load(f)
+    if not os.path.exists(DATA_FILE): return {"users": {}, "messages": []}
+    with open(DATA_FILE, "r") as f: 
+        data = json.load(f)
+        if "messages" not in data:
+            data["messages"] = []
+        return data
 
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f)
@@ -82,30 +87,56 @@ def extract_pincode_and_mobile(text):
     for chunk in chunks:
         digits_only = chunk.replace('+', '')
         if len(digits_only) == 6: pincode = digits_only
-        elif len(digits_only) in [10, 11, 12, 13]: mobile = digits_only[-10:]
+        elif len(digits_only) == 10: mobile = digits_only
+        elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF OFFLINE PINCODE CSV LOADER ---
+# --- BULLETPROOF HYBRID PINCODE FETCHER ---
 @st.cache_data(show_spinner=False)
-def load_pincode_database_records():
-    csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
-    if not os.path.exists(csv_path): return {}
+def fetch_live_pincode_data(pin_code_str):
+    fallback_res = {"district": "", "statename": ""}
+    if not pin_code_str: return fallback_res
+    pin = str(pin_code_str).strip()
+    if len(pin) != 6 or not pin.isdigit(): return fallback_res
     
     try:
-        df = pd.read_csv(csv_path, dtype=str)
-        # Force strict lowercase and strip spaces to map headers accurately
-        df.columns = [str(c).lower().strip() for c in df.columns]
-        
-        if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns:
-            return {}
-            
-        df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        df = df[df['pincode'] != ""] 
-        
-        df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
-        return df_unique.set_index('pincode').to_dict(orient='index')
+        url = f"https://api.postalpincode.in/pincode/{pin}"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list) and len(data) > 0:
+                first_item = data[0]
+                if isinstance(first_item, dict) and first_item.get("Status") == "Success":
+                    post_offices = first_item.get("PostOffice")
+                    if isinstance(post_offices, list) and len(post_offices) > 0:
+                        office = post_offices[0]
+                        if isinstance(office, dict):
+                            return {
+                                "district": str(office.get("District", "")).upper(),
+                                "statename": str(office.get("State", "")).upper()
+                            }
     except Exception:
-        return {}
+        pass 
+        
+    try:
+        url = f"https://pincode.net.in/{pin}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            html = response.text
+            district, state = "", ""
+            try:
+                d_match = re.search(r'District[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
+                if d_match is not None: district = d_match.group(1).strip().upper()
+            except Exception: pass
+            try:
+                s_match = re.search(r'State[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
+                if s_match is not None: state = s_match.group(1).strip().upper()
+            except Exception: pass
+            if district or state: return {"district": district, "statename": state}
+    except Exception:
+        pass 
+    return fallback_res
 
 # --- EXCEL EXPORT NUMERIC FORMAT FORCING CONVERTER ---
 def safe_numeric(val):
@@ -117,7 +148,6 @@ def safe_numeric(val):
         return int(s)
     except: return s
 
-# --- ADDRESS SEGMENT PARTITION COMPLIANCE ENGINE ---
 def split_address_to_lines(address_text):
     lines = [line.strip() for line in str(address_text).split('\n') if line.strip()]
     name = lines[0] if len(lines) > 0 else "CUSTOMER"
@@ -140,8 +170,9 @@ def draw_single_label(entry, width_in, height_in):
     H_px = int(height_in * DPI)
     m_px = int(W_px * 0.05)
     
+    Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
-    my_barcode = Code128(str(entry['tracking']), writer=ImageWriter())
+    my_barcode = Code128(entry['tracking'], writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
     bc_buffer.seek(0)
     bc_img = Image.open(bc_buffer)
@@ -167,22 +198,19 @@ def draw_single_label(entry, width_in, height_in):
     if entry.get('cust_id'): top_strings.append(f"CUST ID: {entry['cust_id']}")
     if entry.get('cod'): top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
     
-    if W_px >= H_px:  # LANDSCAPE MODE
+    if W_px >= H_px:
         bc_h_scaled = int(H_px * 0.13)
         bc_w_scaled = int(W_px * 0.65)
         bc_y_pos = H_px - bc_h_scaled - m_px - int(H_px * 0.05)
         col_width = (W_px - (3 * m_px)) // 2
-        
         y_left = m_px
         for line in top_strings:
             draw.text((m_px, y_left), line, fill="black", font=f_b)
             b_box = draw.textbbox((0,0), line, font=f_b)
             y_left += (b_box[3] - b_box[1]) + int(H_px * 0.015)
-            
         y_left += int(H_px * 0.02)
         draw.text((m_px, y_left), "FROM:", fill="black", font=f_b)
         y_left += int(size_b * 1.2)
-        
         w_from = wrap_text_to_pixels(entry['from'], draw, f_m, col_width)
         draw.multiline_text((m_px, y_left), w_from, fill="black", font=f_m, spacing=8)
         
@@ -190,46 +218,38 @@ def draw_single_label(entry, width_in, height_in):
         y_right = m_px
         draw.text((x_right, y_right), "TO:", fill="black", font=f_b)
         y_right += int(size_b * 1.2)
-        
         w_to = wrap_text_to_pixels(entry['to'], draw, f_l, col_width)
         draw.multiline_text((x_right, y_right), w_to, fill="black", font=f_l, spacing=8)
         
         bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
         lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
-    else:  # PORTRAIT MODE
+    else: 
         use_w = W_px - (2 * m_px)
         bc_h_scaled = int(H_px * 0.11)
         bc_w_scaled = int(W_px * 0.75)
         bc_y_pos = H_px - bc_h_scaled - m_px - int(H_px * 0.05)
-        
         y_curr = m_px
         for line in top_strings:
             draw.text((m_px, y_curr), line, fill="black", font=f_b)
             b_box = draw.textbbox((0,0), line, font=f_b)
             y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.012)
-            
         y_curr += int(H_px * 0.02)
         draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
         y_curr += int(size_b * 1.2)
-        
         w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
         draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=8)
         b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=8)
         y_cursor_from = b_box[3] + int(H_px * 0.04)
-        
         draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
         y_cursor_from += int(size_b * 1.2)
-        
         w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
         draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=8)
-        
         bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
         lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
         
     bbox_bc = draw.textbbox((0, 0), entry['tracking'], font=f_bc)
     text_bc_w = bbox_bc[2] - bbox_bc[0]
     draw.text(((W_px - text_bc_w) // 2, bc_y_pos + bc_h_scaled + int(H_px * 0.012)), entry['tracking'], fill="black", font=f_bc)
-        
     return lbl_canvas
 
 def get_base64_image(image_path):
@@ -288,7 +308,6 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# Core UI Bound Keys - Must exist before UI renders
 default_keys = [
     "s_addr_val", "r_addr_val", "s_mob_val", "r_mob_val", "r_pin_val", "load_profile_dd", "clear_requested"
 ]
@@ -297,10 +316,7 @@ for key in default_keys:
         st.session_state[key] = "" if key != "load_profile_dd" else "-- Select Profile --"
         if key == "clear_requested": st.session_state[key] = False
 
-# Load Master Pincode Dictionary into Memory Cache
-pincode_lookup_db = load_pincode_database_records()
-
-# --- PRE-RENDER CLEAR FLAG (Fixes StreamlitAPIException and PRESERVES Sender Data) ---
+# --- PRE-RENDER CLEAR FLAG ---
 if st.session_state.clear_requested:
     st.session_state.r_addr_val = ""
     st.session_state.r_mob_val = ""
@@ -381,13 +397,7 @@ if not st.session_state.authenticated:
                             st.success("Success! Please log in.")
     st.stop()
 
-# --- SIDEBAR DIAGNOSTICS ---
-if pincode_lookup_db:
-    st.sidebar.success(f"✅ Secure CSV Database Loaded: **{len(pincode_lookup_db)}** routes active.")
-else:
-    st.sidebar.error("⚠️ CSV Pincode Database NOT loaded! Ensure 'all_india_pincode_directory_2025.csv' is uploaded and correctly formatted.")
-
-# --- DASHBOARD ---
+# --- LOAD DATA & MESSAGES ---
 current_user = st.session_state.username
 db = load_data()
 user_profile = db["users"][current_user]
@@ -398,6 +408,7 @@ if "barcodes" not in user_profile: user_profile["barcodes"] = {}
 for pk in BARCODE_POOL_KEYS:
     if pk not in user_profile["barcodes"]: user_profile["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
 
+# --- DASHBOARD HEADER ---
 col_logout_wrap = st.columns([0.80, 0.20])
 with col_logout_wrap[0]:
     st.markdown(f"<h4 style='margin:0; color:#1e293b;'>📋 Active Client: {user_profile.get('name', current_user)} | Node ID: `{current_user}`</h4>", unsafe_allow_html=True)
@@ -406,8 +417,34 @@ with col_logout_wrap[1]:
         st.session_state.clear()
         st.rerun()
 
+# --- USER NOTIFICATION ALERT SYSTEM ---
+if current_user.lower() != "admin":
+    my_unread_msgs = [m for m in db.get("messages", []) if m["to"] == current_user and m["status"] == "unread"]
+    if my_unread_msgs:
+        st.markdown("<h4 style='color: #b45309; margin-bottom: 0px;'>🔔 Important Notifications</h4>", unsafe_allow_html=True)
+        for msg in my_unread_msgs:
+            with st.container(border=True):
+                st.warning(f"**Admin Message:** {msg['text']}")
+                reply_input = st.text_input("Send a Reply to Admin:", key=f"reply_in_{msg['id']}")
+                col1, col2 = st.columns([0.2, 0.8])
+                with col1:
+                    if st.button("Send Reply", key=f"btn_rep_{msg['id']}"):
+                        if reply_input.strip():
+                            msg["reply"] = reply_input.strip()
+                            msg["status"] = "replied"
+                            save_data(db)
+                            st.rerun()
+                with col2:
+                    if st.button("Mark as Read (No Reply)", key=f"btn_rd_{msg['id']}"):
+                        msg["status"] = "read"
+                        save_data(db)
+                        st.rerun()
+
+# --- TABS ---
 tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 Generated Labels"]
-if current_user.lower() == "admin": tabs_list.append("👥 Admin Panel")
+if current_user.lower() == "admin": 
+    tabs_list.append("👥 Admin Directory")
+    tabs_list.append("✉️ Message Center")
 tabs = st.tabs(tabs_list)
 
 # --- TAB 1: DISPATCH MANAGER ---
@@ -506,7 +543,7 @@ with tabs[0]:
                     save_data(db)
                     
                     st.session_state.clear_requested = True
-                    st.success("Staged successfully! Ready for the next recipient.")
+                    st.success("Staged successfully!")
                     st.rerun()
 
     with col_preview:
@@ -529,7 +566,7 @@ with tabs[0]:
                     if not os.path.exists(template_filename):
                         st.error("CRITICAL: Master template tracking sheet asset missing from directory.")
                     else:
-                        with st.spinner("Executing secure local database compilation..."):
+                        with st.spinner("Fetching live web pincode data and compiling manifests..."):
                             pdf_pages = []
                             wb = openpyxl.load_workbook(template_filename)
                             ws = wb.active
@@ -539,21 +576,17 @@ with tabs[0]:
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
                                 pdf_pages.append(lbl_canvas)
                                 
-                                # --- SECURE LOCAL CSV LOOKUP ---
+                                # SAFE LIVE API FETCHING
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                                 if not r_pin_clean:
                                     r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
                                     r_pin_clean = str(r_pin_clean).strip().split('.')[0]
-                                    
-                                r_pin_details = pincode_lookup_db.get(r_pin_clean)
-                                if not isinstance(r_pin_details, dict): r_pin_details = {}
+                                r_pin_details = fetch_live_pincode_data(r_pin_clean)
                                 r_name, r_l1, _, _ = split_address_to_lines(entry.get('to', ''))
                                 
                                 s_pin, _ = extract_pincode_and_mobile(entry.get('from', ''))
                                 s_pin_clean = str(s_pin).strip().split('.')[0]
-                                
-                                s_pin_details = pincode_lookup_db.get(s_pin_clean)
-                                if not isinstance(s_pin_details, dict): s_pin_details = {}
+                                s_pin_details = fetch_live_pincode_data(s_pin_clean)
                                 _, s_l1, s_l2, _ = split_address_to_lines(entry.get('from', ''))
                                 
                                 # EXCEL INJECTIONS
@@ -562,12 +595,12 @@ with tabs[0]:
                                 ws.cell(row=next_row, column=3, value=safe_numeric(entry.get('weight', '')))
                                 ws.cell(row=next_row, column=4, value="FALSE")
                                 ws.cell(row=next_row, column=5, value="FALSE")
-                                ws.cell(row=next_row, column=6, value=str(r_pin_details.get('district', '')).upper())
+                                ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))
                                 ws.cell(row=next_row, column=7, value=r_pin_clean)
                                 ws.cell(row=next_row, column=8, value=r_name)
                                 ws.cell(row=next_row, column=9, value=r_l1)
-                                ws.cell(row=next_row, column=10, value=str(r_pin_details.get('district', '')).upper())
-                                ws.cell(row=next_row, column=11, value=str(r_pin_details.get('statename', '')).upper())
+                                ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))
+                                ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))
                                 ws.cell(row=next_row, column=12, value="FALSE")
                                 ws.cell(row=next_row, column=13, value=entry.get('s_mob', ''))
                                 ws.cell(row=next_row, column=14, value=entry.get('r_mob', ''))
@@ -582,15 +615,15 @@ with tabs[0]:
                                 ws.cell(row=next_row, column=24, value=safe_numeric(entry.get('height', '')))
                                 ws.cell(row=next_row, column=25, value="FALSE")
                                 ws.cell(row=next_row, column=29, value=user_profile.get('name', current_user))
-                                ws.cell(row=next_row, column=31, value=str(s_pin_details.get('district', '')).upper())
-                                ws.cell(row=next_row, column=32, value=str(s_pin_details.get('statename', '')).upper())
+                                ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))
+                                ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))
                                 ws.cell(row=next_row, column=33, value=s_pin_clean)
-                                ws.cell(row=next_row, column=39, value=str(r_pin_details.get('statename', '')).upper())
+                                ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))
                                 ws.cell(row=next_row, column=44, value="FALSE")
                                 ws.cell(row=next_row, column=45, value="RMGK REF")
                                 ws.cell(row=next_row, column=46, value=s_l1)
                                 ws.cell(row=next_row, column=47, value=s_l2)
-                                ws.cell(row=next_row, column=48, value=str(s_pin_details.get('statename', '')).upper())
+                                ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))
                                 
                                 next_row += 1
                                 user_profile["generated_labels"].append(entry)
@@ -691,7 +724,7 @@ with tabs[2]:
                             st.rerun()
                 st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
 
-# --- TAB 4: ADMIN PANEL ---
+# --- TABS 4 & 5: ADMIN CONTROLS ---
 if current_user.lower() == "admin":
     with tabs[3]:
         with st.container(border=True):
@@ -703,7 +736,9 @@ if current_user.lower() == "admin":
                 adm_row = st.columns([0.34, 0.22, 0.22, 0.22])
                 with adm_row[0]:
                     st.markdown(f"**User ID:** `{uid}` | **Name:** {info.get('name','N/A')}")
-                    st.caption(f"State: `{u_status.upper()}`")
+                    # --- FIX: Email and Mobile added permanently to Directory View ---
+                    st.caption(f"📧 **Email:** {info.get('email', 'N/A')} | 📱 **Mobile:** {info.get('mobile', 'N/A')}")
+                    st.caption(f"🟢 State: `{u_status.upper()}`")
                 with adm_row[1]:
                     if st.button("🔑 Reset Password", key=f"adm_pwd_{uid}", use_container_width=True):
                         admin_db["users"][uid]["password"] = "123456"
@@ -726,3 +761,40 @@ if current_user.lower() == "admin":
                         save_data(admin_db)
                         st.rerun()
                 st.markdown("<hr style='margin:12px 0; border-color:rgba(0,0,0,0.06);'>", unsafe_allow_html=True)
+                
+    with tabs[4]:
+        with st.container(border=True):
+            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>✉️ Broadcast Message Center</h4>", unsafe_allow_html=True)
+            all_users = [u for u in db["users"].keys() if u.lower() != "admin"]
+            target = st.selectbox("Select Message Recipient", ["All Users"] + all_users)
+            msg_text = st.text_area("Message Content")
+            if st.button("Send Message", type="primary"):
+                if msg_text.strip():
+                    targets = all_users if target == "All Users" else [target]
+                    for t in targets:
+                        db["messages"].append({
+                            "id": f"msg_{int(time.time()*1000)}_{t}",
+                            "to": t,
+                            "text": msg_text,
+                            "reply": "",
+                            "status": "unread",
+                            "timestamp": time.time()
+                        })
+                    save_data(db)
+                    st.success("Message successfully dispatched!")
+                    st.rerun()
+                else:
+                    st.error("Message cannot be blank.")
+                    
+            st.markdown("---")
+            st.markdown("### 📥 User Replies & History")
+            messages_list = db.get("messages", [])
+            if not messages_list:
+                st.info("No messages sent yet.")
+            else:
+                for m in reversed(messages_list):
+                    with st.container(border=True):
+                        st.markdown(f"**To User Node:** `{m['to']}` | **Status:** `{m['status'].upper()}`")
+                        st.info(f"**Admin Sent:** {m['text']}")
+                        if m["reply"]:
+                            st.success(f"**Reply Received:** {m['reply']}")
