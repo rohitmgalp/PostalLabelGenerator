@@ -239,7 +239,12 @@ def draw_single_label(entry, width_in, height_in):
         
     return lbl_canvas
 
-# --- THEME & FLOATING WHATSAPP BUTTON STYLING INJECTION ---
+# --- PREMIUM BASE64 IMAGE ENCODER ---
+def get_base64_image(image_path):
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
+
+# --- STYLING & FLOATING WHATSAPP BUTTON ---
 st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
 bg_file_path = os.path.join(BASE_DIR, "background.png")
 
@@ -290,22 +295,10 @@ else:
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
-
-# --- SAFE PERSISTENT BOUND CONTROLLER INITIALIZERS ---
-if "recipient_address_input" not in st.session_state: st.session_state.recipient_address_input = ""
-if "receiver_mobile_input" not in st.session_state: st.session_state.receiver_mobile_input = ""
-if "extracted_pincode_input" not in st.session_state: st.session_state.extracted_pincode_input = ""
+if 'clear_counter' not in st.session_state: st.session_state.clear_counter = 0
 
 # Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
-
-# --- ISOLATED SAFE EVENT LISTENER CALLBACK ENGINE ---
-def execute_address_mining_callback():
-    """Runs exclusively on focus out to extract address details cleanly without looping"""
-    raw_text = st.session_state.recipient_address_input
-    extracted_pin, extracted_mob = extract_pincode_and_mobile(raw_text)
-    st.session_state.extracted_pincode_input = extracted_pin
-    st.session_state.receiver_mobile_input = extracted_mob
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -437,8 +430,11 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            # Bound via explicit callback trigger logic
-            to_address = st.text_area("Recipient 'To' Address Details", key="recipient_address_input", on_change=execute_address_mining_callback)
+            # Bound via clean reactive layout formatting strategies
+            to_address = st.text_area("Recipient 'To' Address Details", key=f"recipient_address_input_{st.session_state.clear_counter}")
+            
+            # Continuous instant extraction pipeline values assignment mapping
+            ext_pincode, ext_mobile = extract_pincode_and_mobile(to_address)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
@@ -457,11 +453,11 @@ with tabs[0]:
             with col_mob1: 
                 s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
             with col_mob2: 
-                r_mob = st.text_input("Receiver Mobile (Optional)", key="receiver_mobile_input")
+                r_mob = st.text_input("Receiver Mobile (Optional)", value=ext_mobile, key=f"receiver_mobile_{st.session_state.clear_counter}")
                 
             col_pin1, col_pin2 = st.columns(2)
             with col_pin1:
-                pin_code = st.text_input("Extracted Pincode (Optional)", key="extracted_pincode_input")
+                pin_code = st.text_input("Extracted Pincode (Optional)", value=ext_pincode, key=f"extracted_pincode_{st.session_state.clear_counter}")
             with col_pin2:
                 st.write("")
 
@@ -506,10 +502,8 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Safe atomic state clearing maps
-                    st.session_state.recipient_address_input = ""
-                    st.session_state.receiver_mobile_input = ""
-                    st.session_state.extracted_pincode_input = ""
+                    # Safe dynamic increment resets all 3 related widgets on screen simultaneously
+                    st.session_state.clear_counter += 1
                     st.success("Staged successfully into batch pipelines!")
                     st.rerun()
 
