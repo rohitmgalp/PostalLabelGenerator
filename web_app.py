@@ -101,16 +101,12 @@ def load_pincode_database_records():
     if not os.path.exists(csv_path):
         return {}
     try:
-        # Strictly enforce string loading and NA filling to prevent NoneType bugs
         df = pd.read_csv(csv_path, dtype=str)
         df.columns = [c.lower().strip() for c in df.columns]
-        
         if 'pincode' not in df.columns:
             return {}
-            
         df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        df = df[df['pincode'] != ""] # Remove blanks
-        
+        df = df[df['pincode'] != ""]
         df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
         return df_unique.set_index('pincode').to_dict(orient='index')
     except:
@@ -298,24 +294,26 @@ else:
         {whatsapp_html}
     """, unsafe_allow_html=True)
 
-# --- STREAMLIT STATE INITIALIZATION ---
+# --- STRICT PRE-INITIALIZATION TO PREVENT KEYERRORS ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# Core Widget State Protections
-if "s_addr_widget" not in st.session_state: st.session_state.s_addr_widget = ""
-if "s_mob_widget" not in st.session_state: st.session_state.s_mob_widget = ""
-if "r_addr_widget" not in st.session_state: st.session_state.r_addr_widget = ""
-if "r_mob_widget" not in st.session_state: st.session_state.r_mob_widget = ""
-if "r_pin_widget" not in st.session_state: st.session_state.r_pin_widget = ""
+# CRITICAL: We initialize all widget keys explicitly to empty strings BEFORE rendering them.
+keys_to_init = ["s_addr_widget", "s_mob_widget", "r_addr_widget", "r_mob_widget", "r_pin_widget", "address_quick_selector"]
+for key in keys_to_init:
+    if key not in st.session_state:
+        if key == "address_quick_selector":
+            st.session_state[key] = "-- Select Profile --"
+        else:
+            st.session_state[key] = ""
 
 # Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
 
-# --- ATOMIC ACTION CALLBACKS ---
+# --- ATOMIC ACTION CALLBACKS (Direct Key Manipulation Only) ---
 def handle_quick_load_address_profile():
-    choice = st.session_state.get("address_quick_selector", "-- Select Profile --")
+    choice = st.session_state.address_quick_selector
     if choice != "-- Select Profile --":
         st.session_state.s_addr_widget = choice
         _, ext_s_mobile = extract_pincode_and_mobile(choice)
@@ -323,13 +321,13 @@ def handle_quick_load_address_profile():
             st.session_state.s_mob_widget = ext_s_mobile
 
 def sync_sender_address_data():
-    txt = st.session_state.get("s_addr_widget", "")
+    txt = st.session_state.s_addr_widget
     _, ext_s_mobile = extract_pincode_and_mobile(txt)
     if ext_s_mobile:
         st.session_state.s_mob_widget = ext_s_mobile
 
 def sync_recipient_address_data():
-    txt = st.session_state.get("r_addr_widget", "")
+    txt = st.session_state.r_addr_widget
     ext_r_pincode, ext_r_mobile = extract_pincode_and_mobile(txt)
     if ext_r_pincode:
         st.session_state.r_pin_widget = ext_r_pincode
@@ -438,27 +436,31 @@ with tabs[0]:
             with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
                 
             saved_addresses = user_profile.get("addresses", [])
-            selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="address_quick_selector", on_change=handle_quick_load_address_profile)
+            st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="address_quick_selector", on_change=handle_quick_load_address_profile)
             
-            from_address = st.text_area("Sender 'From' Address Details", key="s_addr_widget", on_change=sync_sender_address_data)
+            # --- CRITICAL FIX: No 'value' argument here, completely relies on Session State Keys ---
+            st.text_area("Sender 'From' Address Details", key="s_addr_widget", on_change=sync_sender_address_data)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
                 if st.button("💾 Remember Address", use_container_width=True):
-                    if from_address and from_address not in user_profile["addresses"]:
-                        db["users"][current_user]["addresses"].append(from_address)
+                    val_to_save = st.session_state.s_addr_widget.strip()
+                    if val_to_save and val_to_save not in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].append(val_to_save)
                         save_data(db)
                         st.success("Address profile recorded.")
                         st.rerun()
             with col_addr_actions[1]:
                 if st.button("🗑️ Delete Address", use_container_width=True):
-                    if selected_saved != "-- Select Profile --" and selected_saved in user_profile["addresses"]:
-                        db["users"][current_user]["addresses"].remove(selected_saved)
+                    val_to_del = st.session_state.address_quick_selector
+                    if val_to_del != "-- Select Profile --" and val_to_del in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].remove(val_to_del)
                         save_data(db)
                         st.warning("Address profile removed.")
+                        st.session_state.address_quick_selector = "-- Select Profile --"
                         st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details", key="r_addr_widget", on_change=sync_recipient_address_data)
+            st.text_area("Recipient 'To' Address Details", key="r_addr_widget", on_change=sync_recipient_address_data)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
@@ -475,13 +477,13 @@ with tabs[0]:
                 
             col_mob1, col_mob2 = st.columns(2)
             with col_mob1: 
-                s_mob = st.text_input("Sender Mobile (Optional)", key="s_mob_widget")
+                st.text_input("Sender Mobile (Optional)", key="s_mob_widget")
             with col_mob2: 
-                r_mob = st.text_input("Receiver Mobile (Optional)", key="r_mob_widget")
+                st.text_input("Receiver Mobile (Optional)", key="r_mob_widget")
                 
             col_pin1, col_pin2 = st.columns(2)
             with col_pin1:
-                pin_code = st.text_input("Extracted Pincode (Optional)", key="r_pin_widget")
+                st.text_input("Extracted Pincode (Optional)", key="r_pin_widget")
             with col_pin2:
                 st.write("")
 
@@ -511,23 +513,35 @@ with tabs[0]:
                     st.error("❌ Barcode Pool Depleted! Update configuration strings.")
 
             if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
-                if not from_address or not to_address or not auto_tracking:
+                # Grab values strictly from the secure widget keys
+                db_from = st.session_state.s_addr_widget.strip()
+                db_to = st.session_state.r_addr_widget.strip()
+                db_s_mob = st.session_state.s_mob_widget.strip()
+                db_r_mob = st.session_state.r_mob_widget.strip()
+                db_pin = st.session_state.r_pin_widget.strip()
+
+                if not db_from or not db_to or not auto_tracking:
                     st.error("From Address, To Address, and a valid Tracking ID range are mandatory.")
                 else:
                     st.session_state.web_queue.append({
-                        "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
+                        "tracking": auto_tracking, "from": db_from, "to": db_to, "article": article_type,
                         "cod": cod_amount, "cust_id": customer_id, 
                         "weight": weight if weight else "", "length": length if length else "", 
                         "breadth": breadth if breadth else "", "height": height_metric if height_metric else "", 
-                        "s_mob": s_mob, "r_mob": r_mob, "pincode": pin_code
+                        "s_mob": db_s_mob, "r_mob": db_r_mob, "pincode": db_pin
                     })
                     db["users"][current_user]["used_barcodes"].append(auto_tracking)
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
+                    # DIRECT KEY FLUSH (Ensures inputs clear out instantly)
+                    st.session_state.s_addr_widget = ""
+                    st.session_state.s_mob_widget = ""
                     st.session_state.r_addr_widget = ""
                     st.session_state.r_mob_widget = ""
                     st.session_state.r_pin_widget = ""
+                    st.session_state.address_quick_selector = "-- Select Profile --"
+                    
                     st.success("Staged successfully into batch pipelines!")
                     st.rerun()
 
@@ -561,7 +575,7 @@ with tabs[0]:
                             lbl_canvas = draw_single_label(entry, width_in, height_in)
                             pdf_pages.append(lbl_canvas)
                             
-                            # --- FIREWALLED DATABASE LOOKUPS (Protects against NoneType Crashes) ---
+                            # --- FIREWALLED DATABASE LOOKUPS ---
                             r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                             if not r_pin_clean:
                                 r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
