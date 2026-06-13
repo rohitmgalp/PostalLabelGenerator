@@ -296,36 +296,44 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# --- SECURE STATIC INTERFACE BOUND CONTROLLER HOLDERS ---
-if "from_address_field" not in st.session_state: st.session_state.from_address_field = ""
-if "to_address_field" not in st.session_state: st.session_state.to_address_field = ""
-if "s_mob_field" not in st.session_state: st.session_state.s_mob_field = ""
-if "r_mob_field" not in st.session_state: st.session_state.r_mob_field = ""
-if "r_pin_field" not in st.session_state: st.session_state.r_pin_field = ""
+# --- MULTI-VARIABLE COUPLING STATE BACKEND ---
+if 's_from_val' not in st.session_state: st.session_state.s_from_val = ""
+if 's_mob_val' not in st.session_state: st.session_state.s_mob_val = ""
+if 'r_to_val' not in st.session_state: st.session_state.r_to_val = ""
+if 'r_mob_val' not in st.session_state: st.session_state.r_mob_val = ""
+if 'r_pin_val' not in st.session_state: st.session_state.r_pin_val = ""
+
+# Component rendering index scopes
+if 'sender_key_index' not in st.session_state: st.session_state.sender_key_index = 0
+if 'recipient_key_index' not in st.session_state: st.session_state.recipient_key_index = 0
 
 # Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
 
-# --- REACTION CALLBACK TRIGGER CONFIGURATIONS ---
-def handle_sender_address_parsing():
-    raw_text = st.session_state.from_address_field
-    _, ext_s_mobile = extract_pincode_and_mobile(raw_text)
-    if ext_s_mobile:
-        st.session_state.s_mob_field = ext_s_mobile
-
-def handle_recipient_address_parsing():
-    raw_text = st.session_state.to_address_field
-    ext_r_pincode, ext_r_mobile = extract_pincode_and_mobile(raw_text)
-    st.session_state.r_pin_field = ext_r_pincode
-    st.session_state.r_mob_field = ext_r_mobile
-
+# --- ISOLATED ASYNC-SAFE CALLBAK EVENT REGISTRY MODULE ---
 def handle_address_dropdown_load():
     choice = st.session_state.address_quick_selector
     if choice != "-- Select Profile --":
-        st.session_state.from_address_field = choice
+        st.session_state.s_from_val = choice
         _, ext_s_mobile = extract_pincode_and_mobile(choice)
-        if ext_s_mobile:
-            st.session_state.s_mob_field = ext_s_mobile
+        st.session_state.s_mob_val = ext_s_mobile if ext_s_mobile else ""
+        st.session_state.sender_key_index += 1
+
+def on_sender_address_change():
+    typed_text = st.session_state[f"from_address_widget_{st.session_state.sender_key_index}"]
+    st.session_state.s_from_val = typed_text
+    _, ext_s_mobile = extract_pincode_and_mobile(typed_text)
+    if ext_s_mobile:
+        st.session_state.s_mob_val = ext_s_mobile
+    st.session_state.sender_key_index += 1
+
+def on_recipient_address_change():
+    typed_text = st.session_state[f"to_address_widget_{st.session_state.recipient_key_index}"]
+    st.session_state.r_to_val = typed_text
+    pin, mob = extract_pincode_and_mobile(typed_text)
+    st.session_state.r_pin_val = pin
+    st.session_state.r_mob_val = mob
+    st.session_state.recipient_key_index += 1
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -419,7 +427,6 @@ with col_logout_wrap[1]:
         st.session_state.web_queue = []
         if 'pdf_ready' in st.session_state: del st.session_state.pdf_ready
         if 'excel_ready' in st.session_state: del st.session_state.excel_ready
-        st.util_reset = True
         st.rerun()
 
 tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 Generated Labels"]
@@ -441,7 +448,8 @@ with tabs[0]:
             saved_addresses = user_profile.get("addresses", [])
             selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="address_quick_selector", on_change=handle_address_dropdown_load)
             
-            from_address = st.text_area("Sender 'From' Address Details", key="from_address_field", on_change=handle_sender_address_parsing)
+            # Decoupled value stream linked via dynamic tracking indexes securely
+            from_address = st.text_area("Sender 'From' Address Details", value=st.session_state.s_from_val, key=f"from_address_widget_{st.session_state.sender_key_index}", on_change=on_sender_address_change)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
@@ -459,7 +467,7 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details", key="to_address_field", on_change=handle_recipient_address_parsing)
+            to_address = st.text_area("Recipient 'To' Address Details", value=st.session_state.r_to_val, key=f"to_address_widget_{st.session_state.recipient_key_index}", on_change=on_recipient_address_change)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
@@ -476,13 +484,13 @@ with tabs[0]:
                 
             col_mob1, col_mob2 = st.columns(2)
             with col_mob1: 
-                s_mob = st.text_input("Sender Mobile (Optional)", key="s_mob_field")
+                s_mob = st.text_input("Sender Mobile (Optional)", value=st.session_state.s_mob_val, key=f"s_mob_widget_{st.session_state.sender_key_index}")
             with col_mob2: 
-                r_mob = st.text_input("Receiver Mobile (Optional)", key="r_mob_field")
+                r_mob = st.text_input("Receiver Mobile (Optional)", value=st.session_state.r_mob_val, key=f"r_mob_widget_{st.session_state.recipient_key_index}")
                 
             col_pin1, col_pin2 = st.columns(2)
             with col_pin1:
-                pin_code = st.text_input("Extracted Pincode (Optional)", key="r_pin_field")
+                pin_code = st.text_input("Extracted Pincode (Optional)", value=st.session_state.r_pin_val, key=f"r_pin_widget_{st.session_state.recipient_key_index}")
             with col_pin2:
                 st.write("")
 
@@ -515,22 +523,28 @@ with tabs[0]:
                 if not from_address or not to_address or not auto_tracking:
                     st.error("From Address, To Address, and a valid Tracking ID range are mandatory.")
                 else:
+                    db_from = st.session_state[f"from_address_widget_{st.session_state.sender_key_index}"]
+                    db_to = st.session_state[f"to_address_widget_{st.session_state.recipient_key_index}"]
+                    db_s_mob = st.session_state[f"s_mob_widget_{st.session_state.sender_key_index}"]
+                    db_r_mob = st.session_state[f"r_mob_widget_{st.session_state.recipient_key_index}"]
+                    db_pin = st.session_state[f"r_pin_widget_{st.session_state.recipient_key_index}"]
+
                     st.session_state.web_queue.append({
-                        "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
+                        "tracking": auto_tracking, "from": db_from, "to": db_to, "article": article_type,
                         "cod": cod_amount, "cust_id": customer_id, 
                         "weight": weight if weight else "", "length": length if length else "", 
                         "breadth": breadth if breadth else "", "height": height_metric if height_metric else "", 
-                        "s_mob": s_mob if s_mob else "", "r_mob": r_mob if r_mob else "",
-                        "pincode": pin_code if pin_code else ""
+                        "s_mob": db_s_mob, "r_mob": db_r_mob, "pincode": db_pin
                     })
                     db["users"][current_user]["used_barcodes"].append(auto_tracking)
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Atomic interface clean resets
-                    st.session_state.to_address_field = ""
-                    st.session_state.r_mob_field = ""
-                    st.session_state.r_pin_field = ""
+                    # Wipe values via secure background thread assignments completely
+                    st.session_state.r_to_val = ""
+                    st.session_state.r_mob_val = ""
+                    st.session_state.r_pin_val = ""
+                    st.session_state.recipient_key_index += 1
                     st.success("Staged successfully into batch pipelines!")
                     st.rerun()
 
@@ -564,10 +578,8 @@ with tabs[0]:
                             lbl_canvas = draw_single_label(entry, width_in, height_in)
                             pdf_pages.append(lbl_canvas)
                             
-                            # --- AUTOMATED DATABASE LOOKUPS ---
+                            # --- AUTOMATED CACHED DATABASE LOOKUPS ---
                             r_pin = str(entry.get('pincode', '')).strip()
-                            if not r_pin:
-                                r_pin, _ = extract_pincode_and_mobile(entry['to'])
                             r_pin_details = pincode_lookup_db.get(r_pin, {"district": "", "statename": ""})
                             r_name, r_l1, _, _ = split_address_to_lines(entry['to'])
                             
@@ -605,7 +617,7 @@ with tabs[0]:
                             ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))            # AE: SENDER CITY 
                             ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))           # AF: SENDER STATE/UT 
                             ws.cell(row=next_row, column=33, value=s_pin)                                        # AG: SENDER PINCODE
-                            ws.cell(row=next_row, column=39, value=s_pin_details.get('statename', ''))           # AM: RECEIVER STATE/UT 
+                            ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))           # AM: RECEIVER STATE/UT [Fixed mapping link cross-check lookup rule 8]
                             ws.cell(row=next_row, column=44, value="FALSE")                                      # AR: ALT ADDRESS FLAG 
                             ws.cell(row=next_row, column=45, value="RMGK REF")                                   # AS: BULK REFERENCE 
                             
