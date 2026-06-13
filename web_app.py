@@ -32,48 +32,26 @@ BARCODE_POOL_KEYS = [
     "Business Parcel COD"
 ]
 
+# --- INDESTRUCTIBLE JSON LOADER ---
 def load_data():
-    if not os.path.exists(DATA_FILE): return {"users": {}, "messages": []}
-    with open(DATA_FILE, "r") as f: 
-        try:
-            data = json.load(f)
-            if "messages" not in data: data["messages"] = []
+    default_db = {"users": {}, "messages": []}
+    if not os.path.exists(DATA_FILE): 
+        return default_db
+    try:
+        with open(DATA_FILE, "r") as f:
+            content = f.read().strip()
+            if not content: return default_db
+            data = json.loads(content)
+            if not isinstance(data, dict): return default_db
+            # Forces core structures to exist even if JSON is corrupted
             if "users" not in data: data["users"] = {}
+            if "messages" not in data: data["messages"] = []
             return data
-        except Exception:
-            return {"users": {}, "messages": []}
+    except Exception:
+        return default_db
 
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f)
-
-# --- THE FIX: DATABASE DOCTOR (HEALS CORRUPTED JSON FILES INSTANTLY) ---
-def normalize_user_profile(username, database):
-    if "users" not in database: database["users"] = {}
-    if username not in database["users"]: return
-    
-    user_ref = database["users"][username]
-    changed = False
-    
-    if "used_barcodes" not in user_ref:
-        user_ref["used_barcodes"] = []
-        changed = True
-    if "generated_labels" not in user_ref:
-        user_ref["generated_labels"] = []
-        changed = True
-    if "addresses" not in user_ref:
-        user_ref["addresses"] = []
-        changed = True
-    if "barcodes" not in user_ref:
-        user_ref["barcodes"] = {}
-        changed = True
-        
-    for pk in BARCODE_POOL_KEYS:
-        if pk not in user_ref["barcodes"]:
-            user_ref["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
-            changed = True
-            
-    if changed:
-        save_data(database)
 
 def get_pool_key(article_type):
     if article_type in ["Speed Post Parcel", "Speed Post Parcel COD"]:
@@ -354,7 +332,6 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# Initialize Core Fields
 core_keys = ["s_addr", "s_mob", "r_addr", "r_mob", "r_pin", "w", "l", "b", "h", "cod", "cust", "load_profile_dd"]
 for k in core_keys:
     if k not in st.session_state:
@@ -405,12 +382,13 @@ def execute_stage(tracking, article, pool_key, current_serial):
     
     current_u = st.session_state.username
     db = load_data()
-    normalize_user_profile(current_u, db) # HEALS CORRUPTED DATABASE IMMEDIATELY
     
+    # Secure DB Save
     db["users"][current_u]["used_barcodes"].append(tracking)
     db["users"][current_u]["barcodes"][pool_key]["current"] = current_serial + 1
     save_data(db)
     
+    # MAGIC: Instantly clears recipient fields inside the safe callback zone!
     st.session_state.r_addr = ""
     st.session_state.r_mob = ""
     st.session_state.r_pin = ""
@@ -481,17 +459,45 @@ if not st.session_state.authenticated:
                             st.success("Success! Please log in.")
     st.stop()
 
+# --- FATAL ERROR PREVENTION (LOGOUT IF JSON CORRUPTS) ---
+current_user = st.session_state.username
+db = load_data()
+
+if current_user not in db["users"]:
+    st.session_state.authenticated = False
+    st.session_state.username = ""
+    st.rerun()
+
+user_profile = db["users"][current_user]
+
+# --- SELF-HEALING USER PROFILE DATABASE ---
+db_changed = False
+if "used_barcodes" not in user_profile: 
+    user_profile["used_barcodes"] = []
+    db_changed = True
+if "generated_labels" not in user_profile: 
+    user_profile["generated_labels"] = []
+    db_changed = True
+if "addresses" not in user_profile: 
+    user_profile["addresses"] = []
+    db_changed = True
+if "barcodes" not in user_profile: 
+    user_profile["barcodes"] = {}
+    db_changed = True
+for pk in BARCODE_POOL_KEYS:
+    if pk not in user_profile["barcodes"]: 
+        user_profile["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
+        db_changed = True
+
+if db_changed:
+    db["users"][current_user] = user_profile
+    save_data(db)
+
 # --- SIDEBAR DIAGNOSTICS ---
 if pincode_lookup_db:
     st.sidebar.success(f"✅ Secure CSV Database Loaded: **{len(pincode_lookup_db)}** routes active.")
 else:
     st.sidebar.error("⚠️ CSV Pincode Database NOT loaded! Ensure 'all_india_pincode_directory_2025.csv' is uploaded.")
-
-# --- LOAD DATA & MESSAGES ---
-current_user = st.session_state.username
-db = load_data()
-normalize_user_profile(current_user, db) # Force initialization
-user_profile = db["users"][current_user]
 
 # --- DASHBOARD HEADER ---
 col_logout_wrap = st.columns([0.80, 0.20])
