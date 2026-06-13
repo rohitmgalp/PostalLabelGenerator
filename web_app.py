@@ -101,20 +101,13 @@ def load_pincode_database_records():
     if not os.path.exists(csv_path):
         return {}
     try:
-        # Load all as strings to bypass Pandas datatype mixing errors
-        df = pd.read_csv(csv_path, dtype=str)
-        # Normalize headers to lowercase to prevent KeyErrors
+        df = pd.read_csv(csv_path, usecols=['pincode', 'district', 'statename'], dtype={'pincode': str})
         df.columns = [c.lower().strip() for c in df.columns]
-        
-        # Failsafe if columns are malformed
-        if 'pincode' not in df.columns:
-            return {}
-            
-        df['pincode'] = df['pincode'].str.strip().str.replace(r'\.0$', '', regex=True)
-        # Drop duplicates and replace NaNs to prevent Excel injection crashes
-        df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
+        df['pincode'] = df['pincode'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        # Select the first row if a pincode maps to duplicate rows in the directory dataset
+        df_unique = df.drop_duplicates(subset=['pincode'], keep='first')
         return df_unique.set_index('pincode').to_dict(orient='index')
-    except Exception as e:
+    except:
         return {}
 
 # --- EXCEL EXPORT NUMERIC FORMAT FORCING CONVERTER ---
@@ -154,7 +147,6 @@ def draw_single_label(entry, width_in, height_in):
     H_px = int(height_in * DPI)
     m_px = int(W_px * 0.05)
     
-    # Modern Barcode Syntax to prevent attribute errors
     Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
     my_barcode = Code128(entry['tracking'], writer=ImageWriter())
@@ -300,12 +292,13 @@ else:
         {whatsapp_html}
     """, unsafe_allow_html=True)
 
-# --- STREAMLIT STATE INITIALIZATION (STRICT MAPPING) ---
+# --- STREAMLIT STATE INITIALIZATION ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# Protect these keys so they are never "missing" during a refresh
+# --- SAFE SESSION STATE CALLBACK REGISTRATION ---
+# Ensures keys exist before callbacks try to interact with them
 if "s_addr_widget" not in st.session_state: st.session_state.s_addr_widget = ""
 if "s_mob_widget" not in st.session_state: st.session_state.s_mob_widget = ""
 if "r_addr_widget" not in st.session_state: st.session_state.r_addr_widget = ""
@@ -315,9 +308,9 @@ if "r_pin_widget" not in st.session_state: st.session_state.r_pin_widget = ""
 # Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
 
-# --- ATOMIC REACTION ACTION LISTENERS ---
+# --- ATOMIC ACTION CALLBACKS WITH SAFE RETRIEVAL (Fixes KeyError) ---
 def handle_quick_load_address_profile():
-    choice = st.session_state.address_quick_selector
+    choice = st.session_state.get("address_quick_selector", "-- Select Profile --")
     if choice != "-- Select Profile --":
         st.session_state.s_addr_widget = choice
         _, ext_s_mobile = extract_pincode_and_mobile(choice)
@@ -325,13 +318,13 @@ def handle_quick_load_address_profile():
             st.session_state.s_mob_widget = ext_s_mobile
 
 def sync_sender_address_data():
-    txt = st.session_state.s_addr_widget
+    txt = st.session_state.get("s_addr_widget", "")
     _, ext_s_mobile = extract_pincode_and_mobile(txt)
     if ext_s_mobile:
         st.session_state.s_mob_widget = ext_s_mobile
 
 def sync_recipient_address_data():
-    txt = st.session_state.r_addr_widget
+    txt = st.session_state.get("r_addr_widget", "")
     ext_r_pincode, ext_r_mobile = extract_pincode_and_mobile(txt)
     if ext_r_pincode:
         st.session_state.r_pin_widget = ext_r_pincode
