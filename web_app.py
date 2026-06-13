@@ -102,13 +102,10 @@ def load_pincode_database_records():
     if not os.path.exists(csv_path):
         return {}
     try:
-        # Reads target columns to minimize memory footprint
         df = pd.read_csv(csv_path, usecols=['pincode', 'district', 'statename'], dtype={'pincode': str})
         df.columns = [c.lower().strip() for c in df.columns]
         df['pincode'] = df['pincode'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df_unique = df.drop_duplicates(subset=['pincode'])
-        
-        # Generates instantaneous dictionary map for O(1) lookups
         return df_unique.set_index('pincode').to_dict(orient='index')
     except:
         return {}
@@ -263,7 +260,6 @@ if os.path.exists(bg_file_path):
             .stTextInput input, .stTextArea textarea, .stSelectbox div {{ border-color: #cbd5e1 !important; background-color: #ffffff !important; color: #0f172a !important; }}
             div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
             div.stButton > button[type="primary"]:hover {{ background-color: #bd0000 !important; }}
-            
             .whatsapp-float {{
                 position: fixed; bottom: 24px; right: 24px; background-color: #25d366; color: white !important;
                 padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: 'Segoe UI', sans-serif;
@@ -295,12 +291,21 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-if "addr_text" not in st.session_state: st.session_state.addr_text = ""
-if "addr_pin" not in st.session_state: st.session_state.addr_pin = ""
-if "addr_mob" not in st.session_state: st.session_state.addr_mob = ""
+# --- SAFE PERSISTENT BOUND CONTROLLER INITIALIZERS ---
+if "recipient_address_input" not in st.session_state: st.session_state.recipient_address_input = ""
+if "receiver_mobile_input" not in st.session_state: st.session_state.receiver_mobile_input = ""
+if "extracted_pincode_input" not in st.session_state: st.session_state.extracted_pincode_input = ""
 
-# Pre-load Pincode Database Memory Array
+# Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
+
+# --- ISOLATED SAFE EVENT LISTENER CALLBACK ENGINE ---
+def execute_address_mining_callback():
+    """Runs exclusively on focus out to extract address details cleanly without looping"""
+    raw_text = st.session_state.recipient_address_input
+    extracted_pin, extracted_mob = extract_pincode_and_mobile(raw_text)
+    st.session_state.extracted_pincode_input = extracted_pin
+    st.session_state.receiver_mobile_input = extracted_mob
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -432,14 +437,8 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details", value=st.session_state.addr_text)
-            
-            if to_address != st.session_state.addr_text:
-                st.session_state.addr_text = to_address
-                pin, mob = extract_pincode_and_mobile(to_address)
-                st.session_state.addr_pin = pin
-                st.session_state.addr_mob = mob
-                st.rerun()
+            # Bound via explicit callback trigger logic
+            to_address = st.text_area("Recipient 'To' Address Details", key="recipient_address_input", on_change=execute_address_mining_callback)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
@@ -458,11 +457,11 @@ with tabs[0]:
             with col_mob1: 
                 s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
             with col_mob2: 
-                r_mob = st.text_input("Receiver Mobile (Optional)", value=st.session_state.addr_mob)
+                r_mob = st.text_input("Receiver Mobile (Optional)", key="receiver_mobile_input")
                 
             col_pin1, col_pin2 = st.columns(2)
             with col_pin1:
-                pin_code = st.text_input("Extracted Pincode (Optional)", value=st.session_state.addr_pin)
+                pin_code = st.text_input("Extracted Pincode (Optional)", key="extracted_pincode_input")
             with col_pin2:
                 st.write("")
 
@@ -507,9 +506,10 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    st.session_state.addr_text = ""
-                    st.session_state.addr_pin = ""
-                    st.session_state.addr_mob = ""
+                    # Safe atomic state clearing maps
+                    st.session_state.recipient_address_input = ""
+                    st.session_state.receiver_mobile_input = ""
+                    st.session_state.extracted_pincode_input = ""
                     st.success("Staged successfully into batch pipelines!")
                     st.rerun()
 
@@ -543,7 +543,7 @@ with tabs[0]:
                             lbl_canvas = draw_single_label(entry, width_in, height_in)
                             pdf_pages.append(lbl_canvas)
                             
-                            # --- MEMORY DATABASE INSTANT OVERLAY LOOKUPS ---
+                            # --- AUTOMATED DATABASE LOOKUPS ---
                             r_pin = str(entry.get('pincode', '')).strip()
                             r_pin_details = pincode_lookup_db.get(r_pin, {"district": "", "statename": ""})
                             r_name, r_l1, _, _ = split_address_to_lines(entry['to'])
@@ -552,13 +552,13 @@ with tabs[0]:
                             s_pin_details = pincode_lookup_db.get(str(s_pin).strip(), {"district": "", "statename": ""})
                             _, s_l1, s_l2, _ = split_address_to_lines(entry['from'])
                             
-                            # --- COMPLETE DATA COLUMN MATRIX INJECTIONS ---
+                            # --- ENHANCED CORE SHEET SPECIFICATION INJECTIONS ---
                             ws.cell(row=next_row, column=1, value=idx + 1)                                       # A: SERIAL NUMBER
                             ws.cell(row=next_row, column=2, value=entry['tracking'])                             # B: BARCODE NO
                             ws.cell(row=next_row, column=3, value=safe_numeric(entry['weight']))                 # C: PHYSICAL WEIGHT [Forced Numeric]
                             ws.cell(row=next_row, column=4, value="FALSE")                                       # D: REG [Default Value]
                             ws.cell(row=next_row, column=5, value="FALSE")                                       # E: OTP [Default Value]
-                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))             # F: RECEIVER CITY [Pincode Looked-up]
+                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))             # F: RECEIVER CITY [District Map]
                             ws.cell(row=next_row, column=7, value=entry.get('pincode', ''))                      # G: RECEIVER PINCODE
                             ws.cell(row=next_row, column=8, value=r_name)                                        # H: RECEIVER NAME
                             ws.cell(row=next_row, column=9, value=r_l1)                                          # I: RECEIVER ADD LINE 1
