@@ -7,6 +7,7 @@ import time
 import io
 import base64
 import re
+import requests
 import pandas as pd
 from barcode import Code128
 from barcode.writer import ImageWriter
@@ -31,16 +32,28 @@ BARCODE_POOL_KEYS = [
     "Business Parcel COD"
 ]
 
+# --- SELF-HEALING DATABASE MANAGER ---
 def load_data():
-    if not os.path.exists(DATA_FILE): return {"users": {}, "messages": []}
-    with open(DATA_FILE, "r") as f: 
-        data = json.load(f)
-        if "messages" not in data:
-            data["messages"] = []
-        return data
+    default_db = {"users": {}, "messages": []}
+    if not os.path.exists(DATA_FILE): 
+        return default_db
+    try:
+        with open(DATA_FILE, "r") as f: 
+            content = f.read().strip()
+            if not content: return default_db # Fixes completely empty files
+            data = json.loads(content)
+            if not isinstance(data, dict): data = default_db
+            # Auto-repair missing primary keys
+            if "users" not in data: data["users"] = {}
+            if "messages" not in data: data["messages"] = []
+            return data
+    except Exception:
+        # Fallback for corrupted JSON files
+        return default_db
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f: json.dump(data, f)
+    with open(DATA_FILE, "w") as f: 
+        json.dump(data, f)
 
 def get_pool_key(article_type):
     if article_type in ["Speed Post Parcel", "Speed Post Parcel COD"]:
@@ -90,22 +103,18 @@ def extract_pincode_and_mobile(text):
         elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF OFFLINE PINCODE CSV LOADER ---
+# --- BULLETPROOF PINCODE CSV LOADER ---
 @st.cache_data(show_spinner=False)
 def load_pincode_database_records():
     csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
     if not os.path.exists(csv_path): return {}
-    
     try:
         df = pd.read_csv(csv_path, dtype=str)
         df.columns = [str(c).lower().strip() for c in df.columns]
-        
         if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns:
             return {}
-            
         df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df = df[df['pincode'] != ""] 
-        
         df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
         return df_unique.set_index('pincode').to_dict(orient='index')
     except Exception:
@@ -127,7 +136,6 @@ def split_address_to_lines(address_text):
     l1 = lines[1] if len(lines) > 1 else ""
     l2 = lines[2] if len(lines) > 2 else ""
     l3 = ", ".join(lines[3:]) if len(lines) > 3 else ""
-    
     if not l1 and address_text:
         flat = str(address_text).replace('\n', ', ')
         name = flat[:40]
@@ -141,7 +149,6 @@ def draw_single_label(entry, width_in, height_in):
     DPI = 300
     W_px = int(width_in * DPI)
     H_px = int(height_in * DPI)
-    
     if not entry or not isinstance(entry, dict):
         return Image.new('RGB', (W_px, H_px), color='white')
         
@@ -287,13 +294,12 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# --- DYNAMIC KEY GENERATOR INIT (THE ULTIMATE FIX FOR API EXCEPTION) ---
 if 'clear_key' not in st.session_state: st.session_state.clear_key = 0
 
-# We use static keys for Sender so it NEVER clears.
-if 's_addr_val' not in st.session_state: st.session_state.s_addr_val = ""
-if 's_mob_val' not in st.session_state: st.session_state.s_mob_val = ""
-if 'load_profile_dd' not in st.session_state: st.session_state.load_profile_dd = "-- Select Profile --"
+default_keys = ["s_addr_val", "s_mob_val", "load_profile_dd"]
+for key in default_keys:
+    if key not in st.session_state:
+        st.session_state[key] = "" if key != "load_profile_dd" else "-- Select Profile --"
 
 # Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
@@ -377,12 +383,12 @@ if not st.session_state.authenticated:
 if pincode_lookup_db:
     st.sidebar.success(f"✅ Secure CSV Database Loaded: **{len(pincode_lookup_db)}** routes active.")
 else:
-    st.sidebar.error("⚠️ CSV Pincode Database NOT loaded! Ensure 'all_india_pincode_directory_2025.csv' is uploaded and correctly formatted.")
+    st.sidebar.error("⚠️ CSV Pincode Database NOT loaded! Ensure 'all_india_pincode_directory_2025.csv' is uploaded.")
 
 # --- LOAD DATA & MESSAGES ---
 current_user = st.session_state.username
 db = load_data()
-user_profile = db["users"][current_user]
+user_profile = db.get("users", {}).get(current_user, {})
 
 if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
 if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
@@ -401,7 +407,7 @@ with col_logout_wrap[1]:
 
 # --- USER NOTIFICATION ALERT SYSTEM ---
 if current_user.lower() != "admin":
-    my_unread_msgs = [m for m in db.get("messages", []) if m["to"] == current_user and m["status"] == "unread"]
+    my_unread_msgs = [m for m in db.get("messages", []) if m.get("to") == current_user and m.get("status") == "unread"]
     if my_unread_msgs:
         st.markdown("<h4 style='color: #b45309; margin-bottom: 0px;'>🔔 Important Notifications</h4>", unsafe_allow_html=True)
         for msg in my_unread_msgs:
@@ -443,7 +449,7 @@ with tabs[0]:
             saved_addresses = user_profile.get("addresses", [])
             st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile_action)
             
-            from_address = st.text_area("Sender 'From' Address Details", key="s_addr_val", on_change=parse_sender_action)
+            st.text_area("Sender 'From' Address Details", key="s_addr_val", on_change=parse_sender_action)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
@@ -463,8 +469,8 @@ with tabs[0]:
                         st.session_state.load_profile_dd = "-- Select Profile --"
                         st.warning("Address profile removed.")
                         st.rerun()
-                    
-            # --- DYNAMICALLY KEYED RECIPIENT FIELDS ---
+            
+            # Use Dynamic Clear Key for recipients so they can be instantly wiped
             ck = st.session_state.clear_key
             to_address = st.text_area("Recipient 'To' Address Details", key=f"r_addr_{ck}", on_change=parse_recipient_action)
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
@@ -479,11 +485,11 @@ with tabs[0]:
             with col_m4: height_metric = st.text_input("Hgt (cm)")
                 
             col_mob1, col_mob2 = st.columns(2)
-            with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", key="s_mob_val")
-            with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)", key=f"r_mob_{ck}")
+            with col_mob1: st.text_input("Sender Mobile (Optional)", key="s_mob_val")
+            with col_mob2: st.text_input("Receiver Mobile (Optional)", key=f"r_mob_{ck}")
                 
             col_pin1, col_pin2 = st.columns(2)
-            with col_pin1: pin_code = st.text_input("Extracted Pincode (Optional)", key=f"r_pin_{ck}")
+            with col_pin1: st.text_input("Extracted Pincode (Optional)", key=f"r_pin_{ck}")
             with col_pin2: st.write("")
 
             shared_pool_key = get_pool_key(article_type)
@@ -526,8 +532,7 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Instead of clearing values, we INCREMENT the key.
-                    # This instantly deletes the old Receiver boxes and renders fresh, blank ones!
+                    # Force a brand new Recipient ID block by incrementing clear key
                     st.session_state.clear_key += 1
                     st.success("Staged successfully!")
                     st.rerun()
@@ -552,33 +557,29 @@ with tabs[0]:
                     if not os.path.exists(template_filename):
                         st.error("CRITICAL: Master template tracking sheet asset missing from directory.")
                     else:
-                        with st.spinner("Executing secure local database compilation..."):
+                        with st.spinner("Compiling manifest locally against database..."):
                             pdf_pages = []
                             wb = openpyxl.load_workbook(template_filename)
                             ws = wb.active
                             next_row = ws.max_row + 1
                             
                             for idx, entry in enumerate(st.session_state.web_queue):
-                                if not isinstance(entry, dict):
-                                    continue
+                                if not isinstance(entry, dict): continue
                                     
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
-                                if lbl_canvas:
-                                    pdf_pages.append(lbl_canvas)
+                                if lbl_canvas: pdf_pages.append(lbl_canvas)
                                 
-                                # --- SECURE LOCAL CSV LOOKUP ---
+                                # OFFLINE CSV SECURE LOOKUP
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                                 if not r_pin_clean:
                                     r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
                                     r_pin_clean = str(r_pin_clean).strip().split('.')[0]
-                                    
                                 r_pin_details = pincode_lookup_db.get(r_pin_clean)
                                 if not isinstance(r_pin_details, dict): r_pin_details = {}
                                 r_name, r_l1, _, _ = split_address_to_lines(entry.get('to', ''))
                                 
                                 s_pin, _ = extract_pincode_and_mobile(entry.get('from', ''))
                                 s_pin_clean = str(s_pin).strip().split('.')[0]
-                                
                                 s_pin_details = pincode_lookup_db.get(s_pin_clean)
                                 if not isinstance(s_pin_details, dict): s_pin_details = {}
                                 _, s_l1, s_l2, _ = split_address_to_lines(entry.get('from', ''))
@@ -760,7 +761,7 @@ if current_user.lower() == "admin":
     with tabs[4]:
         with st.container(border=True):
             st.markdown("<h4 style='color:#9c0000; margin-top:0;'>✉️ Broadcast Message Center</h4>", unsafe_allow_html=True)
-            all_users = [u for u in db["users"].keys() if u.lower() != "admin"]
+            all_users = [u for u in db.get("users", {}).keys() if u.lower() != "admin"]
             target = st.selectbox("Select Message Recipient", ["All Users"] + all_users)
             msg_text = st.text_area("Message Content")
             if st.button("Send Message", type="primary"):
@@ -801,10 +802,10 @@ if current_user.lower() == "admin":
                     with st.container(border=True):
                         col_m1, col_m2 = st.columns([0.85, 0.15])
                         with col_m1:
-                            st.markdown(f"**To User Node:** `{m['to']}` | **Status:** `{m['status'].upper()}`")
-                            st.info(f"**Admin Sent:** {m['text']}")
-                            if m["reply"]:
-                                st.success(f"**Reply Received:** {m['reply']}")
+                            st.markdown(f"**To User Node:** `{m.get('to')}` | **Status:** `{m.get('status', 'unread').upper()}`")
+                            st.info(f"**Admin Sent:** {m.get('text')}")
+                            if m.get("reply"):
+                                st.success(f"**Reply Received:** {m.get('reply')}")
                         with col_m2:
                             if st.button("❌ Delete", key=f"del_msg_ind_{real_idx}"):
                                 db["messages"].pop(real_idx)
