@@ -87,10 +87,9 @@ def extract_pincode_and_mobile(text):
         elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- LIVE API WEB FETCHER (BULLETPROOF VERSION) ---
+# --- LIVE API WEB FETCHER ---
 @st.cache_data(show_spinner=False)
 def fetch_live_pincode_data(pin_code_str):
-    """Hits the official postal API to get District and State instantly"""
     if not pin_code_str: return {"district": "", "statename": ""}
     pin = str(pin_code_str).strip()
     if len(pin) != 6: return {"district": "", "statename": ""}
@@ -100,7 +99,6 @@ def fetch_live_pincode_data(pin_code_str):
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
             data = response.json()
-            # Deep Type Validation Firewall to prevent NoneType crashes
             if data and isinstance(data, list) and len(data) > 0:
                 first_item = data[0]
                 if isinstance(first_item, dict) and first_item.get("Status") == "Success":
@@ -298,30 +296,33 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# Core UI Bound Keys - Must exist before UI renders
-default_keys = ["s_addr_val", "r_addr_val", "s_mob_val", "r_mob_val", "r_pin_val", "load_profile_dd"]
+# Guarantee all keys exist to completely prevent KeyError
+default_keys = [
+    "sender_address", "sender_mobile", "recipient_address", "recipient_mobile", "recipient_pincode", 
+    "profile_selector", "form_weight", "form_length", "form_breadth", "form_height", "form_cod", "form_cust_id"
+]
 for key in default_keys:
     if key not in st.session_state:
-        st.session_state[key] = "" if key != "load_profile_dd" else "-- Select Profile --"
+        st.session_state[key] = "" if key != "profile_selector" else "-- Select Profile --"
 
-# --- BULLETPROOF CALLBACKS ---
-def load_profile_action():
-    choice = st.session_state.load_profile_dd
+# --- SAFE ACTION CALLBACKS ---
+def on_profile_select():
+    choice = st.session_state.get("profile_selector", "-- Select Profile --")
     if choice != "-- Select Profile --":
-        st.session_state.s_addr_val = choice
+        st.session_state.sender_address = choice
         _, mob = extract_pincode_and_mobile(choice)
-        if mob: st.session_state.s_mob_val = mob
+        if mob: st.session_state.sender_mobile = mob
 
-def parse_sender_action():
-    txt = st.session_state.s_addr_val
+def on_sender_change():
+    txt = st.session_state.get("sender_address", "")
     _, mob = extract_pincode_and_mobile(txt)
-    if mob: st.session_state.s_mob_val = mob
+    if mob: st.session_state.sender_mobile = mob
 
-def parse_recipient_action():
-    txt = st.session_state.r_addr_val
+def on_recipient_change():
+    txt = st.session_state.get("recipient_address", "")
     pin, mob = extract_pincode_and_mobile(txt)
-    if pin: st.session_state.r_pin_val = pin
-    if mob: st.session_state.r_mob_val = mob
+    if pin: st.session_state.recipient_pincode = pin
+    if mob: st.session_state.recipient_mobile = mob
 
 # --- AUTHENTICATION ---
 if not st.session_state.authenticated:
@@ -413,46 +414,48 @@ with tabs[0]:
             with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
                 
             saved_addresses = user_profile.get("addresses", [])
-            st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile_action)
+            st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="profile_selector", on_change=on_profile_select)
             
-            from_address = st.text_area("Sender 'From' Address Details", key="s_addr_val", on_change=parse_sender_action)
+            st.text_area("Sender 'From' Address Details", key="sender_address", on_change=on_sender_change)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
                 if st.button("💾 Remember Address", use_container_width=True):
-                    if from_address and from_address not in user_profile["addresses"]:
-                        db["users"][current_user]["addresses"].append(from_address)
+                    val = st.session_state.get("sender_address", "").strip()
+                    if val and val not in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].append(val)
                         save_data(db)
                         st.success("Address profile recorded.")
                         st.rerun()
             with col_addr_actions[1]:
                 if st.button("🗑️ Delete Address", use_container_width=True):
-                    val_to_del = st.session_state.load_profile_dd
-                    if val_to_del != "-- Select Profile --" and val_to_del in user_profile["addresses"]:
-                        db["users"][current_user]["addresses"].remove(val_to_del)
+                    val = st.session_state.get("profile_selector", "-- Select Profile --")
+                    if val != "-- Select Profile --" and val in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].remove(val)
                         save_data(db)
-                        st.session_state.load_profile_dd = "-- Select Profile --"
+                        st.session_state.profile_selector = "-- Select Profile --"
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details", key="r_addr_val", on_change=parse_recipient_action)
+            st.text_area("Recipient 'To' Address Details", key="recipient_address", on_change=on_recipient_change)
+            
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
-            cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)") if "COD" in article_type else ""
-            customer_id = st.text_input("India Post Customer Business ID")
+            if "COD" in article_type: st.text_input("Collect on Delivery (COD) Amount (₹)", key="form_cod")
+            st.text_input("India Post Customer Business ID", key="form_cust_id")
             
             st.write("**Volumetric Specifications (Optional)**")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: weight = st.text_input("Weight (g)")
-            with col_m2: length = st.text_input("Len (cm)")
-            with col_m3: breadth = st.text_input("Wid (cm)")
-            with col_m4: height_metric = st.text_input("Hgt (cm)")
+            with col_m1: st.text_input("Weight (g)", key="form_weight")
+            with col_m2: st.text_input("Len (cm)", key="form_length")
+            with col_m3: st.text_input("Wid (cm)", key="form_breadth")
+            with col_m4: st.text_input("Hgt (cm)", key="form_height")
                 
             col_mob1, col_mob2 = st.columns(2)
-            with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", key="s_mob_val")
-            with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)", key="r_mob_val")
+            with col_mob1: st.text_input("Sender Mobile (Optional)", key="sender_mobile")
+            with col_mob2: st.text_input("Receiver Mobile (Optional)", key="recipient_mobile")
                 
             col_pin1, col_pin2 = st.columns(2)
-            with col_pin1: pin_code = st.text_input("Extracted Pincode (Optional)", key="r_pin_val")
+            with col_pin1: st.text_input("Extracted Pincode (Optional)", key="recipient_pincode")
             with col_pin2: st.write("")
 
             shared_pool_key = get_pool_key(article_type)
@@ -477,25 +480,46 @@ with tabs[0]:
                 else: st.error("❌ Barcode Pool Depleted! Update configuration strings.")
 
             if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
-                if not from_address or not to_address or not auto_tracking:
+                # Gather variables dynamically
+                db_from = st.session_state.get("sender_address", "").strip()
+                db_to = st.session_state.get("recipient_address", "").strip()
+                db_s_mob = st.session_state.get("sender_mobile", "").strip()
+                db_r_mob = st.session_state.get("recipient_mobile", "").strip()
+                db_pin = st.session_state.get("recipient_pincode", "").strip()
+                db_w = st.session_state.get("form_weight", "").strip()
+                db_l = st.session_state.get("form_length", "").strip()
+                db_b = st.session_state.get("form_breadth", "").strip()
+                db_h = st.session_state.get("form_height", "").strip()
+                db_cod = st.session_state.get("form_cod", "").strip()
+                db_cust = st.session_state.get("form_cust_id", "").strip()
+
+                if not db_from or not db_to or not auto_tracking:
                     st.error("From Address, To Address, and Tracking ID are mandatory.")
                 else:
                     st.session_state.web_queue.append({
-                        "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
-                        "cod": cod_amount, "cust_id": customer_id, "weight": weight, "length": length, 
-                        "breadth": breadth, "height": height_metric, "s_mob": s_mob, "r_mob": r_mob, "pincode": pin_code
+                        "tracking": auto_tracking, "from": db_from, "to": db_to, "article": article_type,
+                        "cod": db_cod, "cust_id": db_cust, "weight": db_w, "length": db_l, 
+                        "breadth": db_b, "height": db_h, "s_mob": db_s_mob, "r_mob": db_r_mob, "pincode": db_pin
                     })
                     db["users"][current_user]["used_barcodes"].append(auto_tracking)
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    st.session_state.s_addr_val = ""
-                    st.session_state.r_addr_val = ""
-                    st.session_state.s_mob_val = ""
-                    st.session_state.r_mob_val = ""
-                    st.session_state.r_pin_val = ""
-                    st.session_state.load_profile_dd = "-- Select Profile --"
-                    st.success("Staged successfully!")
+                    # Complete explicit purge of ALL form fields
+                    st.session_state.sender_address = ""
+                    st.session_state.recipient_address = ""
+                    st.session_state.sender_mobile = ""
+                    st.session_state.recipient_mobile = ""
+                    st.session_state.recipient_pincode = ""
+                    st.session_state.profile_selector = "-- Select Profile --"
+                    st.session_state.form_weight = ""
+                    st.session_state.form_length = ""
+                    st.session_state.form_breadth = ""
+                    st.session_state.form_height = ""
+                    st.session_state.form_cod = ""
+                    st.session_state.form_cust_id = ""
+                    
+                    st.success("Staged successfully! The form has been cleared.")
                     st.rerun()
 
     with col_preview:
@@ -528,7 +552,7 @@ with tabs[0]:
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
                                 pdf_pages.append(lbl_canvas)
                                 
-                                # SAFE LIVE API FETCHING
+                                # LIVE API FETCHING
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                                 if not r_pin_clean:
                                     r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
