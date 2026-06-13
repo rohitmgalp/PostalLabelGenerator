@@ -102,20 +102,40 @@ def lookup_pincode_details(pin_str):
     if not os.path.exists(csv_path):
         return {"district": "", "statename": ""}
     try:
-        df = pd.read_csv(csv_path, dtype={'pincode': str})
+        df = pd.read_csv(csv_path)
         df.columns = [c.lower().strip() for c in df.columns]
-        match = df[df['pincode'] == str(pin_str).strip()]
+        df['pincode'] = df['pincode'].astype(str).str.strip()
+        
+        target = str(pin_str).strip()
+        if '.' in target:
+            target = target.split('.')[0]
+            
+        match = df[df['pincode'] == target]
         if not match.empty:
             row = match.iloc[0]
             return {
-                "district": str(row.get("district", "")).upper(),
-                "statename": str(row.get("statename", "")).upper()
+                "district": str(row.get("district", "")).upper().strip(),
+                "statename": str(row.get("statename", "")).upper().strip()
             }
     except:
         pass
     return {"district": "", "statename": ""}
 
-# --- SENDER ADDRESS CHUNK PARTS ISOLATION ENGINE ---
+# --- EXCEL EXPORT NUMERIC FORMAT FORCING CONVERTER ---
+def safe_numeric(val):
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        if '.' in s:
+            return float(s)
+        return int(s)
+    except:
+        return s
+
+# --- ADDRESS SEGMENT PARTITION COMPLIANCE ENGINE ---
 def split_address_to_lines(address_text):
     lines = [line.strip() for line in str(address_text).split('\n') if line.strip()]
     name = lines[0] if len(lines) > 0 else "CUSTOMER"
@@ -230,19 +250,14 @@ def draw_single_label(entry, width_in, height_in):
         
     return lbl_canvas
 
-# --- PREMIUM BASE64 IMAGE ENCODER ---
-def get_base64_image(image_path):
-    with open(image_path, "rb") as img_file:
-        return base64.b64encode(img_file.read()).decode()
-
-# --- STYLING & FLOATING WHATSAPP BUTTON ---
+# --- THEME & FLOATING WHATSAPP BUTTON STYLING INJECTION ---
 st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
 bg_file_path = os.path.join(BASE_DIR, "background.png")
 
 whatsapp_html = """
     <a href="https://wa.me/918075386388" target="_blank" class="whatsapp-float">
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="margin-right: 8px; display: inline-block; vertical-align: middle;">
-            <path d="M13.601 2.326A7.85 7.85 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.9 7.9 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.9 7.9 0 0 0 13.6 2.326zM7.994 14.521a6.6 6.6 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c1.11-4.285 4.564-6.574 8.718-6.574a6.58 6.58 0 0 1 4.66 2.72 6.58 6.58 0 0 1 1.936 4.663c-.004 4.2-3.563 7.759-7.923 7.759M11.57 9.447c-.19-.094-1.127-.556-1.301-.62-.174-.064-.3-.094-.426.094-.126.188-.488.62-.6.749-.113.128-.226.144-.417.05-.19-.095-.807-.296-1.536-.855-.567-.457-.951-1.022-1.062-1.116-.112-.094-.012-.145.083-.242.085-.087.174-.188.26-.283.085-.087.174-.188.26-.283.087-.095.116-.16.174-.319.059-.158.03-.3-.015-.394-.045-.094-.426-1.026-.583-1.409-.153-.367-.307-.317-.418-.317-.109-.004-.234-.004-.36-.004a.69.69 0 0 0-.5.234c-.174.188-.665.65-0.665 1.583s.678 1.834.773 1.96c.095.127 1.332 2.035 3.226 2.856.45.195.8.311 1.075.398.452.144.863.124 1.189.062.363-.069 1.127-.461 1.284-.906.158-.444.158-.825.11-1.013-.048-.19-.174-.3-.365-.394"/>
+            <path d="M13.601 2.326A7.85 7.85 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.9 7.9 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.9 7.9 0 0 0 13.6 2.326zM7.994 14.521a6.6 6.6 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c1.11-4.285 4.564-6.574 8.718-6.574a6.58 6.58 0 0 1 4.66 2.72 6.58 6.58 0 0 1 1.936 4.663c-.004 4.2-3.563 7.759-7.923 7.759M11.57 9.447c-.19-.094-1.127-.556-1.301-.62-.174-.064-.3-.094-.426.094-.126.188-.488.62-.6.749-.113.128-.226.144-.417.05-.19-.095-.807-.296-1.536-.855-.567-.457-.951-1.022-1.062-1.116-.112-.094-.012-.145.083-.242.085-.087.174-.188.26-.283.087-.095.116-.16.174-.319.059-.158.03-.3-.015-.394-.045-.094-.426-1.026-.583-1.409-.153-.367-.307-.317-.418-.317-.109-.004-.234-.004-.36-.004a.69.69 0 0 0-.5.234c-.174.188-.665.65-0.665 1.583s.678 1.834.773 1.96c.095.127 1.332 2.035 3.226 2.856.45.195.8.311 1.075.398.452.144.863.124 1.189.062.363-.069 1.127-.461 1.284-.906.158-.444.158-.825.11-1.013-.048-.19-.174-.3-.365-.394"/>
         </svg>Contact Us
     </a>
 """
@@ -540,43 +555,43 @@ with tabs[0]:
                             s_pin_details = lookup_pincode_details(s_pin)
                             _, s_l1, s_l2, _ = split_address_to_lines(entry['from'])
                             
-                            # --- ENHANCED NEW SPECIFICATION INJECTIONS ---
-                            ws.cell(row=next_row, column=1, value=idx + 1)                                 # A: SERIAL NUMBER
-                            ws.cell(row=next_row, column=2, value=entry['tracking'])                       # B: BARCODE NO
-                            ws.cell(row=next_row, column=3, value=entry['weight'])                         # C: PHYSICAL WEIGHT
-                            ws.cell(row=next_row, column=4, value="FALSE")                                 # D: REG [Rule 1]
-                            ws.cell(row=next_row, column=5, value="FALSE")                                 # E: OTP [Rule 1]
-                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))       # F: RECEIVER CITY [Rule 2]
-                            ws.cell(row=next_row, column=7, value=entry.get('pincode', ''))                # G: RECEIVER PINCODE
-                            ws.cell(row=next_row, column=8, value=r_name)                                  # H: RECEIVER NAME
-                            ws.cell(row=next_row, column=9, value=r_l1)                                    # I: RECEIVER ADD LINE 1
-                            ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))      # J: RECEIVER ADD LINE 2 [Rule 3]
-                            ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))     # K: RECEIVER ADD LINE 3 [Rule 3]
-                            ws.cell(row=next_row, column=12, value="FALSE")                                # L: ACK [Rule 4]
-                            ws.cell(row=next_row, column=13, value=entry['s_mob'])                         # M: SENDER MOBILE NO
-                            ws.cell(row=next_row, column=14, value=entry['r_mob'])                         # N: RECEIVER MOBILE NO
+                            # --- ENHANCED CORE SHEET SPECIFICATION INJECTIONS ---
+                            ws.cell(row=next_row, column=1, value=idx + 1)                                       # A: SERIAL NUMBER
+                            ws.cell(row=next_row, column=2, value=entry['tracking'])                             # B: BARCODE NO
+                            ws.cell(row=next_row, column=3, value=safe_numeric(entry['weight']))                 # C: PHYSICAL WEIGHT [Forced Numeric]
+                            ws.cell(row=next_row, column=4, value="FALSE")                                       # D: REG [Rule 1]
+                            ws.cell(row=next_row, column=5, value="FALSE")                                       # E: OTP [Rule 1]
+                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))             # F: RECEIVER CITY [Rule 2]
+                            ws.cell(row=next_row, column=7, value=entry.get('pincode', ''))                      # G: RECEIVER PINCODE
+                            ws.cell(row=next_row, column=8, value=r_name)                                        # H: RECEIVER NAME
+                            ws.cell(row=next_row, column=9, value=r_l1)                                          # I: RECEIVER ADD LINE 1
+                            ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))            # J: RECEIVER ADD LINE 2 [Rule 3]
+                            ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))           # K: RECEIVER ADD LINE 3 [Rule 3]
+                            ws.cell(row=next_row, column=12, value="FALSE")                                      # L: ACK [Rule 4]
+                            ws.cell(row=next_row, column=13, value=entry['s_mob'])                               # M: SENDER MOBILE NO
+                            ws.cell(row=next_row, column=14, value=entry['r_mob'])                               # N: RECEIVER MOBILE NO
                             
                             if "COD" in entry['article']:
-                                ws.cell(row=next_row, column=17, value="COD")                              # Q: CODR/COD
-                                ws.cell(row=next_row, column=18, value=entry['cod'])                       # R: VALUE FOR CODR/COD
+                                ws.cell(row=next_row, column=17, value="COD")                                    # Q: CODR/COD
+                                ws.cell(row=next_row, column=18, value=safe_numeric(entry['cod']))               # R: VALUE FOR CODR/COD
                                 
-                            ws.cell(row=next_row, column=21, value="NROL")                                 # U: SHAPE OF ARTICLE [Rule 5]
-                            ws.cell(row=next_row, column=22, value=entry['length'])                        # V: LENGTH
-                            ws.cell(row=next_row, column=23, value=entry['breadth'])                       # W: BREADTH/DIAMETER
-                            ws.cell(row=next_row, column=24, value=entry['height'])                        # X: HEIGHT
-                            ws.cell(row=next_row, column=25, value="FALSE")                                # Y: PRIORITY FLAG [Rule 6]
+                            ws.cell(row=next_row, column=21, value="NROL")                                       # U: SHAPE OF ARTICLE [Rule 5]
+                            ws.cell(row=next_row, column=22, value=safe_numeric(entry['length']))                # V: LENGTH [Forced Numeric]
+                            ws.cell(row=next_row, column=23, value=safe_numeric(entry['breadth']))               # W: BREADTH/DIAMETER [Forced Numeric]
+                            ws.cell(row=next_row, column=24, value=safe_numeric(entry['height']))                # X: HEIGHT [Forced Numeric]
+                            ws.cell(row=next_row, column=25, value="FALSE")                                      # Y: PRIORITY FLAG [Rule 6]
                             
-                            ws.cell(row=next_row, column=29, value=user_profile.get('name', current_user)) # AC: SENDER NAME
-                            ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))      # AE: SENDER CITY [Rule 7]
-                            ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))     # AF: SENDER STATE/UT [Rule 7]
-                            ws.cell(row=next_row, column=33, value=s_pin)                                  # AG: SENDER PINCODE
-                            ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))     # AM: RECEIVER STATE/UT [Rule 8]
-                            ws.cell(row=next_row, column=44, value="FALSE")                                # AR: ALT ADDRESS FLAG [Rule 9]
-                            ws.cell(row=next_row, column=45, value="RMGK REF")                             # AS: BULK REFERENCE [Rule 10]
+                            ws.cell(row=next_row, column=29, value=user_profile.get('name', current_user))       # AC: SENDER NAME
+                            ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))            # AE: SENDER CITY [Rule 7]
+                            ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))           # AF: SENDER STATE/UT [Rule 7]
+                            ws.cell(row=next_row, column=33, value=s_pin)                                        # AG: SENDER PINCODE
+                            ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))           # AM: RECEIVER STATE/UT [Rule 8]
+                            ws.cell(row=next_row, column=44, value="FALSE")                                      # AR: ALT ADDRESS FLAG [Rule 9]
+                            ws.cell(row=next_row, column=45, value="RMGK REF")                                   # AS: BULK REFERENCE [Rule 10]
                             
-                            ws.cell(row=next_row, column=46, value=s_l1)                                   # AT: SENDER ADD LINE 1
-                            ws.cell(row=next_row, column=47, value=s_l2)                                   # AU: SENDER ADD LINE 2
-                            ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))     # AV: SENDER ADD LINE 3 [Rule 11]
+                            ws.cell(row=next_row, column=46, value=s_l1)                                         # AT: SENDER ADD LINE 1
+                            ws.cell(row=next_row, column=47, value=s_l2)                                         # AU: SENDER ADD LINE 2
+                            ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))           # AV: SENDER ADD LINE 3 [Rule 11]
                             
                             next_row += 1
                             user_profile["generated_labels"].append(entry)
@@ -699,7 +714,7 @@ with tabs[2]:
                             st.rerun()
                 st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
 
-# --- TAB 4: ADMIN PANEL ---
+# --- TAB 4: REAL-TIME INTERACTIVE CONTROL GRID (ADMIN PANEL) ---
 if current_user.lower() == "admin":
     with tabs[3]:
         with st.container(border=True):
