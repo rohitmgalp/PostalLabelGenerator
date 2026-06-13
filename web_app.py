@@ -38,12 +38,42 @@ def load_data():
         try:
             data = json.load(f)
             if "messages" not in data: data["messages"] = []
+            if "users" not in data: data["users"] = {}
             return data
         except Exception:
             return {"users": {}, "messages": []}
 
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f)
+
+# --- THE FIX: DATABASE DOCTOR (HEALS CORRUPTED JSON FILES INSTANTLY) ---
+def normalize_user_profile(username, database):
+    if "users" not in database: database["users"] = {}
+    if username not in database["users"]: return
+    
+    user_ref = database["users"][username]
+    changed = False
+    
+    if "used_barcodes" not in user_ref:
+        user_ref["used_barcodes"] = []
+        changed = True
+    if "generated_labels" not in user_ref:
+        user_ref["generated_labels"] = []
+        changed = True
+    if "addresses" not in user_ref:
+        user_ref["addresses"] = []
+        changed = True
+    if "barcodes" not in user_ref:
+        user_ref["barcodes"] = {}
+        changed = True
+        
+    for pk in BARCODE_POOL_KEYS:
+        if pk not in user_ref["barcodes"]:
+            user_ref["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
+            changed = True
+            
+    if changed:
+        save_data(database)
 
 def get_pool_key(article_type):
     if article_type in ["Speed Post Parcel", "Speed Post Parcel COD"]:
@@ -93,13 +123,56 @@ def extract_pincode_and_mobile(text):
         elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
+# --- BULLETPROOF HYBRID PINCODE FETCHER ---
+@st.cache_data(show_spinner=False)
+def fetch_live_pincode_data(pin_code_str):
+    fallback_res = {"district": "", "statename": ""}
+    if not pin_code_str: return fallback_res
+    pin = str(pin_code_str).strip()
+    if len(pin) != 6 or not pin.isdigit(): return fallback_res
+    try:
+        url = f"https://api.postalpincode.in/pincode/{pin}"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list) and len(data) > 0:
+                first_item = data[0]
+                if isinstance(first_item, dict) and first_item.get("Status") == "Success":
+                    post_offices = first_item.get("PostOffice")
+                    if isinstance(post_offices, list) and len(post_offices) > 0:
+                        office = post_offices[0]
+                        if isinstance(office, dict):
+                            return {
+                                "district": str(office.get("District", "")).upper(),
+                                "statename": str(office.get("State", "")).upper()
+                            }
+    except Exception: pass 
+    try:
+        url = f"https://pincode.net.in/{pin}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            html = response.text
+            district, state = "", ""
+            try:
+                d_match = re.search(r'District[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
+                if d_match is not None: district = d_match.group(1).strip().upper()
+            except Exception: pass
+            try:
+                s_match = re.search(r'State[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
+                if s_match is not None: state = s_match.group(1).strip().upper()
+            except Exception: pass
+            if district or state: return {"district": district, "statename": state}
+    except Exception: pass 
+    return fallback_res
+
 # --- BULLETPROOF OFFLINE CSV LOADER ---
 @st.cache_data(show_spinner=False)
 def load_pincode_database_records():
     csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
     if not os.path.exists(csv_path): return {}
     try:
-        df = pd.read_csv(csv_path, dtype=str)
+        df = pd.read_csv(csv_path, dtype=str, on_bad_lines='skip')
         df.columns = [str(c).lower().strip() for c in df.columns]
         if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns: return {}
         df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
@@ -281,11 +354,8 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# Initialize Core Fields at Top-Level to Prevent ALL KeyErrors
-core_keys = [
-    "s_addr", "s_mob", "r_addr", "r_mob", "r_pin", 
-    "w", "l", "b", "h", "cod", "cust", "load_profile_dd"
-]
+# Initialize Core Fields
+core_keys = ["s_addr", "s_mob", "r_addr", "r_mob", "r_pin", "w", "l", "b", "h", "cod", "cust", "load_profile_dd"]
 for k in core_keys:
     if k not in st.session_state:
         st.session_state[k] = "" if k != "load_profile_dd" else "-- Select Profile --"
@@ -293,7 +363,7 @@ for k in core_keys:
 if 'stage_err' not in st.session_state: st.session_state.stage_err = ""
 if 'stage_succ' not in st.session_state: st.session_state.stage_succ = ""
 
-# --- SAFE CALLBACKS (NO KEY MODIFICATION) ---
+# --- SAFE CALLBACKS ---
 def s_addr_changed():
     addr = st.session_state.s_addr
     _, mob = extract_pincode_and_mobile(addr)
@@ -320,7 +390,6 @@ def execute_stage(tracking, article, pool_key, current_serial):
         st.session_state.stage_err = "From Address, To Address, and Tracking ID are mandatory."
         return
         
-    # Using .get() for optional fields prevents KeyError if condition hid them
     st.session_state.web_queue.append({
         "tracking": tracking, "from": from_val, "to": to_val, "article": article,
         "cod": st.session_state.get("cod", "").strip() if "COD" in article else "",
@@ -336,11 +405,12 @@ def execute_stage(tracking, article, pool_key, current_serial):
     
     current_u = st.session_state.username
     db = load_data()
+    normalize_user_profile(current_u, db) # HEALS CORRUPTED DATABASE IMMEDIATELY
+    
     db["users"][current_u]["used_barcodes"].append(tracking)
     db["users"][current_u]["barcodes"][pool_key]["current"] = current_serial + 1
     save_data(db)
     
-    # MAGIC: Instantly clears recipient fields inside the safe callback zone!
     st.session_state.r_addr = ""
     st.session_state.r_mob = ""
     st.session_state.r_pin = ""
@@ -353,7 +423,6 @@ def execute_stage(tracking, article, pool_key, current_serial):
     
     st.session_state.stage_succ = "Staged successfully! Ready for the next recipient."
 
-# Load Database Cache
 pincode_lookup_db = load_pincode_database_records()
 
 # --- AUTHENTICATION ---
@@ -379,7 +448,7 @@ if not st.session_state.authenticated:
                         st.error("Please enter both User ID and Password fields.")
                     else:
                         data = load_data()
-                        if user_id in data["users"] and data["users"][user_id]["password"] == password:
+                        if user_id in data.get("users", {}) and data["users"][user_id]["password"] == password:
                             if data["users"][user_id].get("status", "active") == "locked":
                                 st.error("❌ Access Exception: Locked.")
                             else:
@@ -400,8 +469,9 @@ if not st.session_state.authenticated:
                         st.error("All fields mandatory.")
                     else:
                         data = load_data()
-                        if user_id in data["users"]: st.error("Occupied ID.")
+                        if user_id in data.get("users", {}): st.error("Occupied ID.")
                         else:
+                            if "users" not in data: data["users"] = {}
                             data["users"][user_id] = {
                                 "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
                                 "status": "active", "addresses": [], "used_barcodes": [], "generated_labels": [],
@@ -420,13 +490,8 @@ else:
 # --- LOAD DATA & MESSAGES ---
 current_user = st.session_state.username
 db = load_data()
-user_profile = db.get("users", {}).get(current_user, {})
-
-if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
-if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
-if "barcodes" not in user_profile: user_profile["barcodes"] = {}
-for pk in BARCODE_POOL_KEYS:
-    if pk not in user_profile["barcodes"]: user_profile["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
+normalize_user_profile(current_user, db) # Force initialization
+user_profile = db["users"][current_user]
 
 # --- DASHBOARD HEADER ---
 col_logout_wrap = st.columns([0.80, 0.20])
@@ -481,7 +546,6 @@ with tabs[0]:
             saved_addresses = user_profile.get("addresses", [])
             st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile)
             
-            # --- SENDER ---
             st.text_area("Sender 'From' Address Details", key="s_addr", on_change=s_addr_changed)
             
             col_addr_actions = st.columns(2)
@@ -503,7 +567,6 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
             
-            # --- RECEIVER ---
             st.text_area("Recipient 'To' Address Details", key="r_addr", on_change=r_addr_changed)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
@@ -804,10 +867,8 @@ if current_user.lower() == "admin":
                     st.error("Message cannot be blank.")
                     
             st.markdown("---")
-            
             col_msg_head1, col_msg_head2 = st.columns([0.75, 0.25])
-            with col_msg_head1:
-                st.markdown("### 📥 User Replies & History")
+            with col_msg_head1: st.markdown("### 📥 User Replies & History")
             with col_msg_head2:
                 if st.button("🗑️ Clear All History", type="primary"):
                     db["messages"] = []
