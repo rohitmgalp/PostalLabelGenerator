@@ -9,7 +9,6 @@ import base64
 import re
 import requests
 import pandas as pd
-import barcode
 from barcode import Code128
 from barcode.writer import ImageWriter
 from PIL import Image, ImageDraw, ImageFont
@@ -305,6 +304,12 @@ if 'stage_err' not in st.session_state: st.session_state.stage_err = ""
 if 'stage_succ' not in st.session_state: st.session_state.stage_succ = ""
 if 'load_profile_dd' not in st.session_state: st.session_state.load_profile_dd = "-- Select Profile --"
 
+# Initialize variables specifically for Volumetric & Config Data to ensure they survive Staging
+if 'form_w' not in st.session_state: st.session_state.form_w = ""
+if 'form_l' not in st.session_state: st.session_state.form_l = ""
+if 'form_b' not in st.session_state: st.session_state.form_b = ""
+if 'form_h' not in st.session_state: st.session_state.form_h = ""
+
 # --- SAFE CALLBACKS ---
 def s_addr_changed():
     sid = st.session_state.s_id
@@ -350,10 +355,10 @@ def execute_stage(tracking, article, pool_key, current_serial):
         "tracking": tracking, "from": from_val, "to": to_val, "article": article,
         "cod": st.session_state.get(f"cod_{rid}", "").strip(),
         "cust_id": st.session_state.get("cust_shared", "").strip(),
-        "weight": st.session_state.get(f"w_{rid}", "").strip(),
-        "length": st.session_state.get(f"l_{rid}", "").strip(),
-        "breadth": st.session_state.get(f"b_{rid}", "").strip(),
-        "height": st.session_state.get(f"h_{rid}", "").strip(),
+        "weight": st.session_state.form_w.strip(),    # Persistent variable
+        "length": st.session_state.form_l.strip(),    # Persistent variable
+        "breadth": st.session_state.form_b.strip(),   # Persistent variable
+        "height": st.session_state.form_h.strip(),    # Persistent variable
         "s_mob": st.session_state.get(f"s_mob_{sid}", "").strip(),
         "r_mob": st.session_state.get(f"r_mob_{rid}", "").strip(),
         "pincode": st.session_state.get(f"r_pin_{rid}", "").strip()
@@ -363,7 +368,10 @@ def execute_stage(tracking, article, pool_key, current_serial):
     db["users"][current_u]["barcodes"][pool_key]["current"] = current_serial + 1
     save_data(db)
     
+    # MAGIC: Only clears the Recipient Data. Dimensional data (w, l, b, h) is NOT cleared.
     st.session_state.r_id += 1 
+    if f"cod_{rid}" in st.session_state: del st.session_state[f"cod_{rid}"]
+    
     st.session_state.stage_succ = "Staged successfully! Ready for the next recipient."
 
 pincode_lookup_db = load_pincode_database_records()
@@ -414,6 +422,7 @@ if not st.session_state.authenticated:
                         data = load_data()
                         if user_id in data.get("users", {}): st.error("Occupied ID.")
                         else:
+                            if "users" not in data: data["users"] = {}
                             data["users"][user_id] = {
                                 "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
                                 "status": "active", "addresses": [], "used_barcodes": [], "generated_labels": [],
@@ -527,10 +536,11 @@ with tabs[0]:
             
             st.write("**Volumetric Specifications (Optional)**")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: st.text_input("Weight (g)", key=f"w_{r_id}")
-            with col_m2: st.text_input("Len (cm)", key=f"l_{r_id}")
-            with col_m3: st.text_input("Wid (cm)", key=f"b_{r_id}")
-            with col_m4: st.text_input("Hgt (cm)", key=f"h_{r_id}")
+            # Linked these inputs securely to their persistent state keys
+            with col_m1: st.text_input("Weight (g)", key="form_w")
+            with col_m2: st.text_input("Len (cm)", key="form_l")
+            with col_m3: st.text_input("Wid (cm)", key="form_b")
+            with col_m4: st.text_input("Hgt (cm)", key="form_h")
                 
             col_mob1, col_mob2 = st.columns(2)
             with col_mob1: st.text_input("Sender Mobile (Optional)", key=f"s_mob_{s_id}")
@@ -603,6 +613,7 @@ with tabs[0]:
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
                                 if lbl_canvas: pdf_pages.append(lbl_canvas)
                                 
+                                # OFFLINE CSV SECURE LOOKUP
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                                 if not r_pin_clean:
                                     r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
@@ -617,6 +628,7 @@ with tabs[0]:
                                 if not isinstance(s_pin_details, dict): s_pin_details = {}
                                 _, s_l1, s_l2, _ = split_address_to_lines(entry.get('from', ''))
                                 
+                                # EXCEL INJECTIONS
                                 ws.cell(row=next_row, column=1, value=idx + 1)
                                 ws.cell(row=next_row, column=2, value=entry.get('tracking', ''))
                                 ws.cell(row=next_row, column=3, value=safe_numeric(entry.get('weight', '')))
