@@ -9,7 +9,7 @@ import base64
 import re
 import requests
 import pandas as pd
-import barcode
+from barcode import Code128
 from barcode.writer import ImageWriter
 from PIL import Image, ImageDraw, ImageFont
 
@@ -33,11 +33,14 @@ BARCODE_POOL_KEYS = [
 ]
 
 def load_data():
-    if not os.path.exists(DATA_FILE): return {"users": {}}
-    with open(DATA_FILE, "r") as f: return json.load(f)
+    if not os.path.exists(DATA_FILE):
+        return {"users": {}}
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f: json.dump(data, f)
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
 
 def get_pool_key(article_type):
     if article_type in ["Speed Post Parcel", "Speed Post Parcel COD"]:
@@ -77,17 +80,22 @@ def wrap_text_to_pixels(text, draw, font, max_width):
 
 # --- INTELLIGENT DATA EXTRACTION ENGINE ---
 def extract_pincode_and_mobile(text):
-    pincode, mobile = "", ""
-    if not text: return pincode, mobile
+    pincode = ""
+    mobile = ""
+    if not text:
+        return pincode, mobile
     chunks = re.findall(r'\+?\d+', text)
     for chunk in chunks:
         digits_only = chunk.replace('+', '')
-        if len(digits_only) == 6: pincode = digits_only
-        elif len(digits_only) == 10: mobile = digits_only
-        elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
+        if len(digits_only) == 6:
+            pincode = digits_only
+        elif len(digits_only) == 10:
+            mobile = digits_only
+        elif len(digits_only) in [11, 12, 13]:
+            mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- LIVE API WEB SCRAPER (pincode.net.in) ---
+# --- LIVE API WEB FETCHER ---
 @st.cache_data(show_spinner=False)
 def fetch_live_pincode_data(pin_code_str):
     """Hits pincode.net.in directly and scrapes District and State instantly"""
@@ -104,12 +112,10 @@ def fetch_live_pincode_data(pin_code_str):
             html = response.text
             district, state = "", ""
             
-            # Regex to strictly locate District text inside HTML table tags
             d_match = re.search(r'District[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
             if d_match: 
                 district = d_match.group(1).strip().upper()
                 
-            # Regex to strictly locate State text inside HTML table tags
             s_match = re.search(r'State[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
             if s_match: 
                 state = s_match.group(1).strip().upper()
@@ -122,13 +128,17 @@ def fetch_live_pincode_data(pin_code_str):
 
 # --- EXCEL EXPORT NUMERIC FORMAT FORCING CONVERTER ---
 def safe_numeric(val):
-    if val is None: return None
+    if val is None:
+        return None
     s = str(val).strip()
-    if not s: return None
+    if not s:
+        return None
     try:
-        if '.' in s: return float(s)
+        if '.' in s:
+            return float(s)
         return int(s)
-    except: return s
+    except:
+        return s
 
 # --- ADDRESS SEGMENT PARTITION COMPLIANCE ENGINE ---
 def split_address_to_lines(address_text):
@@ -153,7 +163,6 @@ def draw_single_label(entry, width_in, height_in):
     H_px = int(height_in * DPI)
     m_px = int(W_px * 0.05)
     
-    Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
     my_barcode = Code128(entry['tracking'], writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
@@ -246,6 +255,7 @@ def draw_single_label(entry, width_in, height_in):
         
     return lbl_canvas
 
+# --- PREMIUM BASE64 IMAGE ENCODER ---
 def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
@@ -303,26 +313,28 @@ if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
 # Core UI Bound Keys - Must exist before UI renders
-default_keys = ["s_addr_val", "r_addr_val", "s_mob_val", "r_mob_val", "r_pin_val", "load_profile_dd"]
+default_keys = [
+    "s_addr_val", "r_addr_val", "s_mob_val", "r_mob_val", "r_pin_val", "load_profile_dd"
+]
 for key in default_keys:
     if key not in st.session_state:
         st.session_state[key] = "" if key != "load_profile_dd" else "-- Select Profile --"
 
-# --- BULLETPROOF CALLBACKS ---
+# --- SAFE ACTION CALLBACKS ---
 def load_profile_action():
-    choice = st.session_state.load_profile_dd
+    choice = st.session_state.get("load_profile_dd", "-- Select Profile --")
     if choice != "-- Select Profile --":
         st.session_state.s_addr_val = choice
         _, mob = extract_pincode_and_mobile(choice)
         if mob: st.session_state.s_mob_val = mob
 
 def parse_sender_action():
-    txt = st.session_state.s_addr_val
+    txt = st.session_state.get("s_addr_val", "")
     _, mob = extract_pincode_and_mobile(txt)
     if mob: st.session_state.s_mob_val = mob
 
 def parse_recipient_action():
-    txt = st.session_state.r_addr_val
+    txt = st.session_state.get("r_addr_val", "")
     pin, mob = extract_pincode_and_mobile(txt)
     if pin: st.session_state.r_pin_val = pin
     if mob: st.session_state.r_mob_val = mob
@@ -419,7 +431,7 @@ with tabs[0]:
             saved_addresses = user_profile.get("addresses", [])
             st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile_action)
             
-            from_address = st.text_area("Sender 'From' Address Details", key="s_addr_val", on_change=parse_sender_action)
+            st.text_area("Sender 'From' Address Details", key="s_addr_val", on_change=parse_sender_action)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
@@ -440,9 +452,11 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details", key="r_addr_val", on_change=parse_recipient_action)
+            st.text_area("Recipient 'To' Address Details", key="r_addr_val", on_change=parse_recipient_action)
+            
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
-            cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)") if "COD" in article_type else ""
+            cod_amount = ""
+            if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
             customer_id = st.text_input("India Post Customer Business ID")
             
             st.write("**Volumetric Specifications (Optional)**")
@@ -453,11 +467,11 @@ with tabs[0]:
             with col_m4: height_metric = st.text_input("Hgt (cm)")
                 
             col_mob1, col_mob2 = st.columns(2)
-            with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", key="s_mob_val")
-            with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)", key="r_mob_val")
+            with col_mob1: st.text_input("Sender Mobile (Optional)", key="s_mob_val")
+            with col_mob2: st.text_input("Receiver Mobile (Optional)", key="r_mob_val")
                 
             col_pin1, col_pin2 = st.columns(2)
-            with col_pin1: pin_code = st.text_input("Extracted Pincode (Optional)", key="r_pin_val")
+            with col_pin1: st.text_input("Extracted Pincode (Optional)", key="r_pin_val")
             with col_pin2: st.write("")
 
             shared_pool_key = get_pool_key(article_type)
