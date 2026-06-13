@@ -6,6 +6,7 @@ import json
 import time
 import io
 import base64
+import re
 import pandas as pd
 from barcode import Code128
 from barcode.writer import ImageWriter
@@ -84,22 +85,20 @@ def extract_pincode_and_mobile(text):
     if not text:
         return pincode, mobile
     
-    # Normalize address string segments by breaking out common punctuation marks
-    clean_delimiters = text.replace('-', ' ').replace(':', ' ').replace(',', ' ').replace('.', ' ')
-    words = clean_delimiters.split()
+    # Isolate any numeric word clusters using regex boundaries
+    chunks = re.findall(r'\+?\d+', text)
     
-    for w in words:
-        # Strip string artifacts while leaving digits and absolute phone prefix symbols
-        clean_w = ''.join([c for c in w if c.isdigit() or c == '+'])
-        digits_only = clean_w.replace('+', '')
+    for chunk in chunks:
+        # Strip string prefixes to evaluate pure digits
+        digits_only = chunk.replace('+', '')
         
-        # 1. Capture 6-Digit Standalone Postal Codes
+        # Isolate standalone 6-digit postal pincodes
         if len(digits_only) == 6:
             pincode = digits_only
-        # 2. Capture 10-Digit Standard Mobile Numbers
+        # Isolate standalone 10-digit primary routing numbers
         elif len(digits_only) == 10:
             mobile = digits_only
-        # 3. Capture Extended Country-Coded Routing Configurations (Isolate Last 10 Digits)
+        # Isolate country-coded strings (slice and harvest last 10 characters)
         elif len(digits_only) in [11, 12, 13]:
             mobile = digits_only[-10:]
             
@@ -261,7 +260,11 @@ else:
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
-if 'clear_counter' not in st.session_state: st.session_state.clear_counter = 0
+
+# --- PERSISTENT SEAMLESS INPUT MEMORY HOLDERS ---
+if "addr_text" not in st.session_state: st.session_state.addr_text = ""
+if "addr_pin" not in st.session_state: st.session_state.addr_pin = ""
+if "addr_mob" not in st.session_state: st.session_state.addr_mob = ""
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -393,10 +396,16 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            to_address = st.text_area("Recipient 'To' Address Details", key=f"recipient_to_input_{st.session_state.clear_counter}")
+            # Raw Address input capturing field layout
+            to_address = st.text_area("Recipient 'To' Address Details", value=st.session_state.addr_text)
             
-            # Executing Text Intelligence Mining Rules on Recipient Address Area
-            ext_pincode, ext_mobile = extract_pincode_and_mobile(to_address)
+            # Real-Time Background Synchronization logic triggers when the text changes
+            if to_address != st.session_state.addr_text:
+                st.session_state.addr_text = to_address
+                pin, mob = extract_pincode_and_mobile(to_address)
+                st.session_state.addr_pin = pin
+                st.session_state.addr_mob = mob
+                st.rerun()
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
@@ -415,14 +424,13 @@ with tabs[0]:
             with col_mob1: 
                 s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
             with col_mob2: 
-                # Auto-inject extracted mobile number into widget value configuration mapping
-                r_mob = st.text_input("Receiver Mobile (Optional)", value=ext_mobile, key=f"receiver_mobile_{st.session_state.clear_counter}")
+                # Interactively bound directly to the extracted layout properties stream logic
+                r_mob = st.text_input("Receiver Mobile (Optional)", value=st.session_state.addr_mob)
                 
-            # --- CUSTOM ROW EXTRACTION MODULE BLOCK ---
             col_pin1, col_pin2 = st.columns(2)
             with col_pin1:
-                # Auto-inject extracted 6-digit Pincode cleanly below the Sender Mobile vertical column stack aspect
-                pin_code = st.text_input("Extracted Pincode (Optional)", value=ext_pincode, key=f"recipient_pincode_{st.session_state.clear_counter}")
+                # Interactively bound directly to the extracted layout properties stream logic
+                pin_code = st.text_input("Extracted Pincode (Optional)", value=st.session_state.addr_pin)
             with col_pin2:
                 st.write("")
 
@@ -467,8 +475,10 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Force counter state shifts. Automatically clears text-area, r_mob, and pincode elements together
-                    st.session_state.clear_counter += 1
+                    # Zero out values completely on stage success execution
+                    st.session_state.addr_text = ""
+                    st.session_state.addr_pin = ""
+                    st.session_state.addr_mob = ""
                     st.success("Staged successfully into batch pipelines!")
                     st.rerun()
 
