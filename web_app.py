@@ -78,7 +78,7 @@ def wrap_text_to_pixels(text, draw, font, max_width):
         if current_line: lines.append(current_line)
     return '\n'.join(lines)
 
-# --- INTELLIGENT RECIPIENT DATA EXTRACTION ENGINE ---
+# --- INTELLIGENT DATA EXTRACTION ENGINE ---
 def extract_pincode_and_mobile(text):
     pincode = ""
     mobile = ""
@@ -239,12 +239,7 @@ def draw_single_label(entry, width_in, height_in):
         
     return lbl_canvas
 
-# --- PREMIUM BASE64 IMAGE ENCODER ---
-def get_base64_image(image_path):
-    with open(image_path, "rb") as img_file:
-        return base64.b64encode(img_file.read()).decode()
-
-# --- STYLING & FLOATING WHATSAPP BUTTON ---
+# --- THEME & FLOATING WHATSAPP BUTTON ---
 st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
 bg_file_path = os.path.join(BASE_DIR, "background.png")
 
@@ -412,7 +407,10 @@ with tabs[0]:
                 
             saved_addresses = user_profile.get("addresses", [])
             selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses)
-            from_address = st.text_area("Sender 'From' Address Details", value=selected_saved if selected_saved != "-- Select Profile --" else "")
+            
+            # --- INTELLIGENT SENDER TEXT PARSING NODE ---
+            from_address = st.text_area("Sender 'From' Address Details", value=selected_saved if selected_saved != "-- Select Profile --" else "", key=f"sender_from_address_{st.session_state.clear_counter}")
+            ext_s_pincode, ext_s_mobile = extract_pincode_and_mobile(from_address)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
@@ -430,11 +428,9 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            # Bound via clean reactive layout formatting strategies
-            to_address = st.text_area("Recipient 'To' Address Details", key=f"recipient_address_input_{st.session_state.clear_counter}")
-            
-            # Continuous instant extraction pipeline values assignment mapping
-            ext_pincode, ext_mobile = extract_pincode_and_mobile(to_address)
+            # --- INTELLIGENT RECIPIENT TEXT PARSING NODE ---
+            to_address = st.text_area("Recipient 'To' Address Details", key=f"recipient_to_address_{st.session_state.clear_counter}")
+            ext_r_pincode, ext_r_mobile = extract_pincode_and_mobile(to_address)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
@@ -451,13 +447,15 @@ with tabs[0]:
                 
             col_mob1, col_mob2 = st.columns(2)
             with col_mob1: 
-                s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
+                # Content-reactive unique keys force clean GUI updates when text details change
+                default_s_mob = ext_s_mobile if ext_s_mobile else user_profile.get('mobile', '')
+                s_mob = st.text_input("Sender Mobile (Optional)", value=default_s_mob, key=f"s_mob_field_{st.session_state.clear_counter}_{ext_s_mobile}")
             with col_mob2: 
-                r_mob = st.text_input("Receiver Mobile (Optional)", value=ext_mobile, key=f"receiver_mobile_{st.session_state.clear_counter}")
+                r_mob = st.text_input("Receiver Mobile (Optional)", value=ext_r_mobile, key=f"r_mob_field_{st.session_state.clear_counter}_{ext_r_mobile}")
                 
             col_pin1, col_pin2 = st.columns(2)
             with col_pin1:
-                pin_code = st.text_input("Extracted Pincode (Optional)", value=ext_pincode, key=f"extracted_pincode_{st.session_state.clear_counter}")
+                pin_code = st.text_input("Extracted Pincode (Optional)", value=ext_r_pincode, key=f"r_pin_field_{st.session_state.clear_counter}_{ext_r_pincode}")
             with col_pin2:
                 st.write("")
 
@@ -502,7 +500,6 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Safe dynamic increment resets all 3 related widgets on screen simultaneously
                     st.session_state.clear_counter += 1
                     st.success("Staged successfully into batch pipelines!")
                     st.rerun()
@@ -537,8 +534,10 @@ with tabs[0]:
                             lbl_canvas = draw_single_label(entry, width_in, height_in)
                             pdf_pages.append(lbl_canvas)
                             
-                            # --- AUTOMATED DATABASE LOOKUPS ---
+                            # --- AUTOMATED CACHED DATABASE LOOKUPS (WITH LIVE FAILSAFES) ---
                             r_pin = str(entry.get('pincode', '')).strip()
+                            if not r_pin:
+                                r_pin, _ = extract_pincode_and_mobile(entry['to'])
                             r_pin_details = pincode_lookup_db.get(r_pin, {"district": "", "statename": ""})
                             r_name, r_l1, _, _ = split_address_to_lines(entry['to'])
                             
@@ -550,15 +549,15 @@ with tabs[0]:
                             ws.cell(row=next_row, column=1, value=idx + 1)                                       # A: SERIAL NUMBER
                             ws.cell(row=next_row, column=2, value=entry['tracking'])                             # B: BARCODE NO
                             ws.cell(row=next_row, column=3, value=safe_numeric(entry['weight']))                 # C: PHYSICAL WEIGHT [Forced Numeric]
-                            ws.cell(row=next_row, column=4, value="FALSE")                                       # D: REG [Default Value]
-                            ws.cell(row=next_row, column=5, value="FALSE")                                       # E: OTP [Default Value]
-                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))             # F: RECEIVER CITY [District Map]
-                            ws.cell(row=next_row, column=7, value=entry.get('pincode', ''))                      # G: RECEIVER PINCODE
+                            ws.cell(row=next_row, column=4, value="FALSE")                                       # D: REG 
+                            ws.cell(row=next_row, column=5, value="FALSE")                                       # E: OTP 
+                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))             # F: RECEIVER CITY 
+                            ws.cell(row=next_row, column=7, value=r_pin)                                         # G: RECEIVER PINCODE
                             ws.cell(row=next_row, column=8, value=r_name)                                        # H: RECEIVER NAME
                             ws.cell(row=next_row, column=9, value=r_l1)                                          # I: RECEIVER ADD LINE 1
-                            ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))            # J: RECEIVER ADD LINE 2 [District]
-                            ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))           # K: RECEIVER ADD LINE 3 [State]
-                            ws.cell(row=next_row, column=12, value="FALSE")                                      # L: ACK [Default Value]
+                            ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))            # J: RECEIVER ADD LINE 2 
+                            ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))           # K: RECEIVER ADD LINE 3 
+                            ws.cell(row=next_row, column=12, value="FALSE")                                      # L: ACK 
                             ws.cell(row=next_row, column=13, value=entry['s_mob'])                               # M: SENDER MOBILE NO
                             ws.cell(row=next_row, column=14, value=entry['r_mob'])                               # N: RECEIVER MOBILE NO
                             
@@ -566,23 +565,23 @@ with tabs[0]:
                                 ws.cell(row=next_row, column=17, value="COD")                              # Q: CODR/COD flag
                                 ws.cell(row=next_row, column=18, value=safe_numeric(entry['cod']))               # R: VALUE FOR CODR/COD
                                 
-                            ws.cell(row=next_row, column=21, value="NROL")                                       # U: SHAPE OF ARTICLE [Default Value]
+                            ws.cell(row=next_row, column=21, value="NROL")                                       # U: SHAPE OF ARTICLE 
                             ws.cell(row=next_row, column=22, value=safe_numeric(entry['length']))                # V: LENGTH [Forced Numeric]
                             ws.cell(row=next_row, column=23, value=safe_numeric(entry['breadth']))               # W: BREADTH/DIAMETER [Forced Numeric]
                             ws.cell(row=next_row, column=24, value=safe_numeric(entry['height']))                # X: HEIGHT [Forced Numeric]
-                            ws.cell(row=next_row, column=25, value="FALSE")                                      # Y: PRIORITY FLAG [Default Value]
+                            ws.cell(row=next_row, column=25, value="FALSE")                                      # Y: PRIORITY FLAG 
                             
                             ws.cell(row=next_row, column=29, value=user_profile.get('name', current_user))       # AC: SENDER NAME
-                            ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))            # AE: SENDER CITY [Sender District]
-                            ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))           # AF: SENDER STATE/UT [Sender State]
+                            ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))            # AE: SENDER CITY 
+                            ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))           # AF: SENDER STATE/UT 
                             ws.cell(row=next_row, column=33, value=s_pin)                                        # AG: SENDER PINCODE
-                            ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))           # AM: RECEIVER STATE/UT [Looked-up]
-                            ws.cell(row=next_row, column=44, value="FALSE")                                      # AR: ALT ADDRESS FLAG [Default Value]
-                            ws.cell(row=next_row, column=45, value="RMGK REF")                                   # AS: BULK REFERENCE [Default Value]
+                            ws.cell(row=next_row, column=39, value=s_pin_details.get('statename', ''))           # AM: RECEIVER STATE/UT 
+                            ws.cell(row=next_row, column=44, value="FALSE")                                      # AR: ALT ADDRESS FLAG 
+                            ws.cell(row=next_row, column=45, value="RMGK REF")                                   # AS: BULK REFERENCE 
                             
                             ws.cell(row=next_row, column=46, value=s_l1)                                         # AT: SENDER ADD LINE 1
                             ws.cell(row=next_row, column=47, value=s_l2)                                         # AU: SENDER ADD LINE 2
-                            ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))           # AV: SENDER ADD LINE 3 [Sender State]
+                            ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))           # AV: SENDER ADD LINE 3 
                             
                             next_row += 1
                             user_profile["generated_labels"].append(entry)
@@ -759,4 +758,4 @@ if current_user.lower() == "admin":
                         time.sleep(0.4)
                         st.rerun()
                         
-                st.markdown("<hr style='margin:12px 0; border-color:rgba(0,0,0,0.06);'>", unsafe_allow_html=True)
+                st.markdown("<h4 style='margin:12px 0; border-color:rgba(0,0,0,0.06);'></h4>", unsafe_allow_html=True)
