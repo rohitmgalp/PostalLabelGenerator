@@ -87,7 +87,7 @@ def extract_pincode_and_mobile(text):
         elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- LIVE API WEB FETCHER (REPLACES THE EXCEL DIRECTORY) ---
+# --- LIVE API WEB FETCHER (BULLETPROOF VERSION) ---
 @st.cache_data(show_spinner=False)
 def fetch_live_pincode_data(pin_code_str):
     """Hits the official postal API to get District and State instantly"""
@@ -100,13 +100,18 @@ def fetch_live_pincode_data(pin_code_str):
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
             data = response.json()
-            if data and isinstance(data, list) and data[0].get("Status") == "Success":
-                post_offices = data[0].get("PostOffice", [])
-                if post_offices:
-                    return {
-                        "district": str(post_offices[0].get("District", "")).upper(),
-                        "statename": str(post_offices[0].get("State", "")).upper()
-                    }
+            # Deep Type Validation Firewall to prevent NoneType crashes
+            if data and isinstance(data, list) and len(data) > 0:
+                first_item = data[0]
+                if isinstance(first_item, dict) and first_item.get("Status") == "Success":
+                    post_offices = first_item.get("PostOffice", [])
+                    if post_offices and isinstance(post_offices, list) and len(post_offices) > 0:
+                        office = post_offices[0]
+                        if isinstance(office, dict):
+                            return {
+                                "district": str(office.get("District", "")).upper(),
+                                "statename": str(office.get("State", "")).upper()
+                            }
     except Exception:
         pass
     return {"district": "", "statename": ""}
@@ -293,7 +298,7 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# Core UI Bound Keys - Must exist before UI renders!
+# Core UI Bound Keys - Must exist before UI renders
 default_keys = ["s_addr_val", "r_addr_val", "s_mob_val", "r_mob_val", "r_pin_val", "load_profile_dd"]
 for key in default_keys:
     if key not in st.session_state:
@@ -410,7 +415,6 @@ with tabs[0]:
             saved_addresses = user_profile.get("addresses", [])
             st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile_action)
             
-            # Simple Key Bindings 
             from_address = st.text_area("Sender 'From' Address Details", key="s_addr_val", on_change=parse_sender_action)
             
             col_addr_actions = st.columns(2)
@@ -485,7 +489,6 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Wipe UI directly via keys
                     st.session_state.s_addr_val = ""
                     st.session_state.r_addr_val = ""
                     st.session_state.s_mob_val = ""
@@ -525,7 +528,7 @@ with tabs[0]:
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
                                 pdf_pages.append(lbl_canvas)
                                 
-                                # LIVE API FETCHING
+                                # SAFE LIVE API FETCHING
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                                 if not r_pin_clean:
                                     r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
