@@ -7,7 +7,6 @@ import time
 import io
 import base64
 import re
-import requests
 import pandas as pd
 from barcode import Code128
 from barcode.writer import ImageWriter
@@ -32,28 +31,16 @@ BARCODE_POOL_KEYS = [
     "Business Parcel COD"
 ]
 
-# --- SELF-HEALING DATABASE MANAGER ---
 def load_data():
-    default_db = {"users": {}, "messages": []}
-    if not os.path.exists(DATA_FILE): 
-        return default_db
-    try:
-        with open(DATA_FILE, "r") as f: 
-            content = f.read().strip()
-            if not content: return default_db # Fixes completely empty files
-            data = json.loads(content)
-            if not isinstance(data, dict): data = default_db
-            # Auto-repair missing primary keys
-            if "users" not in data: data["users"] = {}
-            if "messages" not in data: data["messages"] = []
-            return data
-    except Exception:
-        # Fallback for corrupted JSON files
-        return default_db
+    if not os.path.exists(DATA_FILE): return {"users": {}, "messages": []}
+    with open(DATA_FILE, "r") as f: 
+        data = json.load(f)
+        if "messages" not in data:
+            data["messages"] = []
+        return data
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f: 
-        json.dump(data, f)
+    with open(DATA_FILE, "w") as f: json.dump(data, f)
 
 def get_pool_key(article_type):
     if article_type in ["Speed Post Parcel", "Speed Post Parcel COD"]:
@@ -99,8 +86,7 @@ def extract_pincode_and_mobile(text):
     for chunk in chunks:
         digits_only = chunk.replace('+', '')
         if len(digits_only) == 6: pincode = digits_only
-        elif len(digits_only) == 10: mobile = digits_only
-        elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
+        elif len(digits_only) in [10, 11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
 # --- BULLETPROOF PINCODE CSV LOADER ---
@@ -111,10 +97,13 @@ def load_pincode_database_records():
     try:
         df = pd.read_csv(csv_path, dtype=str)
         df.columns = [str(c).lower().strip() for c in df.columns]
+        
         if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns:
             return {}
+            
         df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df = df[df['pincode'] != ""] 
+        
         df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
         return df_unique.set_index('pincode').to_dict(orient='index')
     except Exception:
@@ -136,6 +125,7 @@ def split_address_to_lines(address_text):
     l1 = lines[1] if len(lines) > 1 else ""
     l2 = lines[2] if len(lines) > 2 else ""
     l3 = ", ".join(lines[3:]) if len(lines) > 3 else ""
+    
     if not l1 and address_text:
         flat = str(address_text).replace('\n', ', ')
         name = flat[:40]
@@ -149,6 +139,7 @@ def draw_single_label(entry, width_in, height_in):
     DPI = 300
     W_px = int(width_in * DPI)
     H_px = int(height_in * DPI)
+    
     if not entry or not isinstance(entry, dict):
         return Image.new('RGB', (W_px, H_px), color='white')
         
@@ -294,35 +285,86 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-if 'clear_key' not in st.session_state: st.session_state.clear_key = 0
-
-default_keys = ["s_addr_val", "s_mob_val", "load_profile_dd"]
-for key in default_keys:
-    if key not in st.session_state:
-        st.session_state[key] = "" if key != "load_profile_dd" else "-- Select Profile --"
+# --- ALL WIDGET KEYS PRE-INITIALIZED ---
+keys_to_init = [
+    "s_addr_val", "r_addr_val", "s_mob_val", "r_mob_val", "r_pin_val", 
+    "load_profile_dd", "form_weight", "form_length", "form_breadth", 
+    "form_height", "form_cod", "form_cust_id", "stage_msg"
+]
+for k in keys_to_init:
+    if k not in st.session_state:
+        st.session_state[k] = "" if k != "load_profile_dd" else "-- Select Profile --"
+        if k == "stage_msg": st.session_state[k] = None
 
 # Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
 
-# --- ACTION CALLBACKS ---
+# --- ACTION CALLBACKS FOR AUTO FILL ---
 def load_profile_action():
-    choice = st.session_state.get("load_profile_dd", "-- Select Profile --")
+    choice = st.session_state.load_profile_dd
     if choice != "-- Select Profile --":
         st.session_state.s_addr_val = choice
         _, mob = extract_pincode_and_mobile(choice)
         if mob: st.session_state.s_mob_val = mob
 
 def parse_sender_action():
-    txt = st.session_state.get("s_addr_val", "")
+    txt = st.session_state.s_addr_val
     _, mob = extract_pincode_and_mobile(txt)
     if mob: st.session_state.s_mob_val = mob
 
 def parse_recipient_action():
-    current_k = st.session_state.clear_key
-    txt = st.session_state.get(f"r_addr_{current_k}", "")
+    txt = st.session_state.r_addr_val
     pin, mob = extract_pincode_and_mobile(txt)
-    if pin: st.session_state[f"r_pin_{current_k}"] = pin
-    if mob: st.session_state[f"r_mob_{current_k}"] = mob
+    if pin: st.session_state.r_pin_val = pin
+    if mob: st.session_state.r_mob_val = mob
+
+# --- THE GOLD STANDARD: ON_CLICK STAGING CALLBACK ---
+# This callback executes BEFORE the screen redraws, preventing the StreamlitAPIException entirely.
+def stage_parcel_callback(tracking_id, article_class, pool_key, current_serial):
+    st.session_state.stage_msg = None
+    
+    db_from = st.session_state.s_addr_val.strip()
+    db_to = st.session_state.r_addr_val.strip()
+    
+    if not db_from or not db_to or not tracking_id:
+        st.session_state.stage_msg = ("error", "From Address, To Address, and Tracking ID are mandatory.")
+        return
+
+    st.session_state.web_queue.append({
+        "tracking": tracking_id, 
+        "from": db_from, 
+        "to": db_to, 
+        "article": article_class,
+        "cod": st.session_state.form_cod, 
+        "cust_id": st.session_state.form_cust_id, 
+        "weight": st.session_state.form_weight, 
+        "length": st.session_state.form_length, 
+        "breadth": st.session_state.form_breadth, 
+        "height": st.session_state.form_height, 
+        "s_mob": st.session_state.s_mob_val, 
+        "r_mob": st.session_state.r_mob_val, 
+        "pincode": st.session_state.r_pin_val
+    })
+    
+    # Save Barcode Increment to DB
+    current_u = st.session_state.username
+    db = load_data()
+    db["users"][current_u]["used_barcodes"].append(tracking_id)
+    db["users"][current_u]["barcodes"][pool_key]["current"] = current_serial + 1
+    save_data(db)
+    
+    # SAFELY CLEAR RECIPIENT FIELDS IN MEMORY BEFORE REDRAW
+    st.session_state.r_addr_val = ""
+    st.session_state.r_mob_val = ""
+    st.session_state.r_pin_val = ""
+    st.session_state.form_weight = ""
+    st.session_state.form_length = ""
+    st.session_state.form_breadth = ""
+    st.session_state.form_height = ""
+    st.session_state.form_cod = ""
+    st.session_state.form_cust_id = ""
+    
+    st.session_state.stage_msg = ("success", "Staged successfully! Ready for the next recipient.")
 
 # --- AUTHENTICATION ---
 if not st.session_state.authenticated:
@@ -454,7 +496,7 @@ with tabs[0]:
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
                 if st.button("💾 Remember Address", use_container_width=True):
-                    val = st.session_state.get("s_addr_val", "").strip()
+                    val = st.session_state.s_addr_val.strip()
                     if val and val not in user_profile["addresses"]:
                         db["users"][current_user]["addresses"].append(val)
                         save_data(db)
@@ -462,34 +504,35 @@ with tabs[0]:
                         st.rerun()
             with col_addr_actions[1]:
                 if st.button("🗑️ Delete Address", use_container_width=True):
-                    val = st.session_state.get("load_profile_dd", "-- Select Profile --")
+                    val = st.session_state.load_profile_dd
                     if val != "-- Select Profile --" and val in user_profile["addresses"]:
                         db["users"][current_user]["addresses"].remove(val)
                         save_data(db)
                         st.session_state.load_profile_dd = "-- Select Profile --"
                         st.warning("Address profile removed.")
                         st.rerun()
-            
-            # Use Dynamic Clear Key for recipients so they can be instantly wiped
-            ck = st.session_state.clear_key
-            to_address = st.text_area("Recipient 'To' Address Details", key=f"r_addr_{ck}", on_change=parse_recipient_action)
+                    
+            # Safe Native Callbacks via on_change
+            st.text_area("Recipient 'To' Address Details", key="r_addr_val", on_change=parse_recipient_action)
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
-            cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)") if "COD" in article_type else ""
-            customer_id = st.text_input("India Post Customer Business ID")
+            
+            if "COD" in article_type: 
+                st.text_input("Collect on Delivery (COD) Amount (₹)", key="form_cod")
+            st.text_input("India Post Customer Business ID", key="form_cust_id")
             
             st.write("**Volumetric Specifications (Optional)**")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: weight = st.text_input("Weight (g)")
-            with col_m2: length = st.text_input("Len (cm)")
-            with col_m3: breadth = st.text_input("Wid (cm)")
-            with col_m4: height_metric = st.text_input("Hgt (cm)")
+            with col_m1: st.text_input("Weight (g)", key="form_weight")
+            with col_m2: st.text_input("Len (cm)", key="form_length")
+            with col_m3: st.text_input("Wid (cm)", key="form_breadth")
+            with col_m4: st.text_input("Hgt (cm)", key="form_height")
                 
             col_mob1, col_mob2 = st.columns(2)
             with col_mob1: st.text_input("Sender Mobile (Optional)", key="s_mob_val")
-            with col_mob2: st.text_input("Receiver Mobile (Optional)", key=f"r_mob_{ck}")
+            with col_mob2: st.text_input("Receiver Mobile (Optional)", key="r_mob_val")
                 
             col_pin1, col_pin2 = st.columns(2)
-            with col_pin1: st.text_input("Extracted Pincode (Optional)", key=f"r_pin_{ck}")
+            with col_pin1: st.text_input("Extracted Pincode (Optional)", key="r_pin_val")
             with col_pin2: st.write("")
 
             shared_pool_key = get_pool_key(article_type)
@@ -500,6 +543,7 @@ with tabs[0]:
             if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
                 st.error(f"❌ Shared series empty! Configure ranges for: {shared_pool_key}")
                 auto_tracking = None
+                current_serial_8 = 0
             else:
                 current_serial_8 = int(b_current["current"])
                 auto_tracking = None
@@ -513,29 +557,15 @@ with tabs[0]:
                 if auto_tracking: st.info(f"Next S10 Tracking ID: **{auto_tracking}**")
                 else: st.error("❌ Barcode Pool Depleted! Update configuration strings.")
 
-            if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
-                db_from = st.session_state.get("s_addr_val", "").strip()
-                db_to = st.session_state.get(f"r_addr_{ck}", "").strip()
-                db_s_mob = st.session_state.get("s_mob_val", "").strip()
-                db_r_mob = st.session_state.get(f"r_mob_{ck}", "").strip()
-                db_pin = st.session_state.get(f"r_pin_{ck}", "").strip()
+            # SUCCESS/ERROR ALERTS RENDERED ABOVE THE BUTTON
+            if st.session_state.stage_msg:
+                m_type, text = st.session_state.stage_msg
+                if m_type == "error": st.error(text)
+                else: st.success(text)
+                st.session_state.stage_msg = None
 
-                if not db_from or not db_to or not auto_tracking:
-                    st.error("From Address, To Address, and Tracking ID are mandatory.")
-                else:
-                    st.session_state.web_queue.append({
-                        "tracking": auto_tracking, "from": db_from, "to": db_to, "article": article_type,
-                        "cod": cod_amount, "cust_id": customer_id, "weight": weight, "length": length, 
-                        "breadth": breadth, "height": height_metric, "s_mob": db_s_mob, "r_mob": db_r_mob, "pincode": db_pin
-                    })
-                    db["users"][current_user]["used_barcodes"].append(auto_tracking)
-                    db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
-                    save_data(db)
-                    
-                    # Force a brand new Recipient ID block by incrementing clear key
-                    st.session_state.clear_key += 1
-                    st.success("Staged successfully!")
-                    st.rerun()
+            # THE FIX: Pushing the Stage function to an explicit on_click callback
+            st.button("➕ Stage to Batch Allocation Queue", type="primary", on_click=stage_parcel_callback, args=(auto_tracking, article_type, shared_pool_key, current_serial_8))
 
     with col_preview:
         with st.container(border=True):
@@ -557,7 +587,7 @@ with tabs[0]:
                     if not os.path.exists(template_filename):
                         st.error("CRITICAL: Master template tracking sheet asset missing from directory.")
                     else:
-                        with st.spinner("Compiling manifest locally against database..."):
+                        with st.spinner("Executing secure local database compilation..."):
                             pdf_pages = []
                             wb = openpyxl.load_workbook(template_filename)
                             ws = wb.active
