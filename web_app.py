@@ -9,7 +9,7 @@ import base64
 import re
 import requests
 import pandas as pd
-import barcode
+from barcode import Code128
 from barcode.writer import ImageWriter
 from PIL import Image, ImageDraw, ImageFont
 
@@ -33,11 +33,14 @@ BARCODE_POOL_KEYS = [
 ]
 
 def load_data():
-    if not os.path.exists(DATA_FILE): return {"users": {}}
-    with open(DATA_FILE, "r") as f: return json.load(f)
+    if not os.path.exists(DATA_FILE):
+        return {"users": {}}
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f: json.dump(data, f)
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
 
 def get_pool_key(article_type):
     if article_type in ["Speed Post Parcel", "Speed Post Parcel COD"]:
@@ -77,77 +80,65 @@ def wrap_text_to_pixels(text, draw, font, max_width):
 
 # --- INTELLIGENT DATA EXTRACTION ENGINE ---
 def extract_pincode_and_mobile(text):
-    pincode, mobile = "", ""
-    if not text: return pincode, mobile
+    pincode = ""
+    mobile = ""
+    if not text:
+        return pincode, mobile
     chunks = re.findall(r'\+?\d+', text)
     for chunk in chunks:
         digits_only = chunk.replace('+', '')
-        if len(digits_only) == 6: pincode = digits_only
-        elif len(digits_only) == 10: mobile = digits_only
-        elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
+        if len(digits_only) == 6:
+            pincode = digits_only
+        elif len(digits_only) == 10:
+            mobile = digits_only
+        elif len(digits_only) in [11, 12, 13]:
+            mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF HYBRID PINCODE FETCHER ---
+# --- LIVE API WEB FETCHER ---
 @st.cache_data(show_spinner=False)
 def fetch_live_pincode_data(pin_code_str):
-    """Hits postal API with a fallback to web scraping. Fully wrapped to prevent ALL crashes."""
-    fallback_res = {"district": "", "statename": ""}
-    
-    if not pin_code_str: return fallback_res
+    """Hits pincode.net.in directly and scrapes District and State instantly"""
+    if not pin_code_str: return {"district": "", "statename": ""}
     pin = str(pin_code_str).strip()
-    if len(pin) != 6 or not pin.isdigit(): return fallback_res
+    if len(pin) != 6: return {"district": "", "statename": ""}
     
-    # ATTEMPT 1: Official Postal API
-    try:
-        url = f"https://api.postalpincode.in/pincode/{pin}"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, list) and len(data) > 0:
-                first_item = data[0]
-                if isinstance(first_item, dict) and first_item.get("Status") == "Success":
-                    post_offices = first_item.get("PostOffice")
-                    if isinstance(post_offices, list) and len(post_offices) > 0:
-                        office = post_offices[0]
-                        if isinstance(office, dict):
-                            return {
-                                "district": str(office.get("District", "")).upper(),
-                                "statename": str(office.get("State", "")).upper()
-                            }
-    except Exception:
-        pass # If the API fails, silently ignore and proceed to the fallback scraper
-        
-    # ATTEMPT 2: Pincode.net.in Scraper Fallback
     try:
         url = f"https://pincode.net.in/{pin}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         response = requests.get(url, headers=headers, timeout=5)
+        
         if response.status_code == 200:
             html = response.text
             district, state = "", ""
             
             d_match = re.search(r'District[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
-            if d_match: district = d_match.group(1).strip().upper()
+            if d_match: 
+                district = d_match.group(1).strip().upper()
                 
             s_match = re.search(r'State[^<]*</t[hd]>\s*<t[hd]>(?:<a[^>]*>)?([^<]+)', html, re.IGNORECASE)
-            if s_match: state = s_match.group(1).strip().upper()
+            if s_match: 
+                state = s_match.group(1).strip().upper()
                 
-            if district or state:
-                return {"district": district, "statename": state}
+            return {"district": district, "statename": state}
     except Exception:
-        pass # If the scraper also fails, proceed to return blank fields
-
-    return fallback_res
+        pass
+        
+    return {"district": "", "statename": ""}
 
 # --- EXCEL EXPORT NUMERIC FORMAT FORCING CONVERTER ---
 def safe_numeric(val):
-    if val is None: return None
+    if val is None:
+        return None
     s = str(val).strip()
-    if not s: return None
+    if not s:
+        return None
     try:
-        if '.' in s: return float(s)
+        if '.' in s:
+            return float(s)
         return int(s)
-    except: return s
+    except:
+        return s
 
 # --- ADDRESS SEGMENT PARTITION COMPLIANCE ENGINE ---
 def split_address_to_lines(address_text):
@@ -172,9 +163,9 @@ def draw_single_label(entry, width_in, height_in):
     H_px = int(height_in * DPI)
     m_px = int(W_px * 0.05)
     
-    Code128 = barcode.get_barcode_class('code128')
+    # CRITICAL FIX: Direct Code128 call without get_barcode_class
     bc_buffer = io.BytesIO()
-    my_barcode = Code128(entry['tracking'], writer=ImageWriter())
+    my_barcode = Code128(str(entry['tracking']), writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
     bc_buffer.seek(0)
     bc_img = Image.open(bc_buffer)
@@ -321,6 +312,7 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
+# Core UI Bound Keys - Must exist before UI renders
 default_keys = ["s_addr_val", "r_addr_val", "s_mob_val", "r_mob_val", "r_pin_val", "load_profile_dd"]
 for key in default_keys:
     if key not in st.session_state:
