@@ -93,7 +93,7 @@ def extract_pincode_and_mobile(text):
         elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF HYBRID PINCODE FETCHER ---
+# --- BULLETPROOF PINCODE CSV LOADER ---
 @st.cache_data(show_spinner=False)
 def load_pincode_database_records():
     csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
@@ -110,7 +110,6 @@ def load_pincode_database_records():
     except Exception:
         return {}
 
-# --- EXCEL EXPORT NUMERIC FORMAT FORCING CONVERTER ---
 def safe_numeric(val):
     if val is None: return None
     s = str(val).strip()
@@ -279,88 +278,78 @@ else:
         {whatsapp_html}
     """, unsafe_allow_html=True)
 
-# --- STRICT SESSION STATE INIT ---
+# --- STRICT STATE INIT & DYNAMIC ARCHITECTURE KEYS ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# --- ALL WIDGET KEYS INIT (Prevents KeyErrors and Locks State) ---
-keys_to_init = [
-    "s_addr", "r_addr", "s_mob", "r_mob", "r_pin", "load_profile_dd",
-    "form_w", "form_l", "form_b", "form_h", "form_cod", "form_cust", "stage_msg"
-]
-for k in keys_to_init:
-    if k not in st.session_state:
-        st.session_state[k] = "" if k != "load_profile_dd" else "-- Select Profile --"
-        if k == "stage_msg": st.session_state[k] = None
+# Core Counters for bypassing the API Exception rule
+if 's_id' not in st.session_state: st.session_state.s_id = 0
+if 'r_id' not in st.session_state: st.session_state.r_id = 0
 
-# Load Master Pincode Dictionary into Memory Cache
-pincode_lookup_db = load_pincode_database_records()
+if 'stage_err' not in st.session_state: st.session_state.stage_err = ""
+if 'stage_succ' not in st.session_state: st.session_state.stage_succ = ""
 
-# --- INSTANT BACKGROUND AUTO-FILL CALLBACKS ---
-def update_s_data():
-    txt = st.session_state.s_addr
-    _, m = extract_pincode_and_mobile(txt)
-    if m: st.session_state.s_mob = m
+# --- THE GOLD STANDARD: BACKGROUND CALLBACKS ---
+def s_addr_changed():
+    sid = st.session_state.s_id
+    addr = st.session_state.get(f"s_addr_{sid}", "")
+    _, mob = extract_pincode_and_mobile(addr)
+    if mob: st.session_state[f"s_mob_{sid}"] = mob
 
-def update_r_data():
-    txt = st.session_state.r_addr
-    p, m = extract_pincode_and_mobile(txt)
-    if p: st.session_state.r_pin = p
-    if m: st.session_state.r_mob = m
+def r_addr_changed():
+    rid = st.session_state.r_id
+    addr = st.session_state.get(f"r_addr_{rid}", "")
+    pin, mob = extract_pincode_and_mobile(addr)
+    if pin: st.session_state[f"r_pin_{rid}"] = pin
+    if mob: st.session_state[f"r_mob_{rid}"] = mob
 
-def load_profile_action():
+def load_profile():
     choice = st.session_state.load_profile_dd
     if choice != "-- Select Profile --":
-        st.session_state.s_addr = choice
-        _, m = extract_pincode_and_mobile(choice)
-        if m: st.session_state.s_mob = m
+        # Pushing to a new Sender ID ensures safe population without cache crash
+        st.session_state.s_id += 1
+        new_sid = st.session_state.s_id
+        st.session_state[f"s_addr_{new_sid}"] = choice
+        _, mob = extract_pincode_and_mobile(choice)
+        if mob: st.session_state[f"s_mob_{new_sid}"] = mob
 
-# --- BACKGROUND STAGING CALLBACK (Clears Recipient ONLY, NO API Exception) ---
-def stage_parcel_action(tracking_id, article_class, pool_key, current_serial):
-    db_from = st.session_state.s_addr.strip()
-    db_to = st.session_state.r_addr.strip()
+def execute_stage(tracking, article, pkey, serial):
+    sid = st.session_state.s_id
+    rid = st.session_state.r_id
     
-    if not db_from or not db_to or not tracking_id:
-        st.session_state.stage_msg = ("error", "From Address, To Address, and Tracking ID are mandatory.")
+    from_val = st.session_state.get(f"s_addr_{sid}", "").strip()
+    to_val = st.session_state.get(f"r_addr_{rid}", "").strip()
+    
+    if not from_val or not to_val or not tracking:
+        st.session_state.stage_err = "From Address, To Address, and Tracking ID are mandatory."
         return
-
+        
     st.session_state.web_queue.append({
-        "tracking": tracking_id, 
-        "from": db_from, 
-        "to": db_to, 
-        "article": article_class,
-        "cod": st.session_state.form_cod, 
-        "cust_id": st.session_state.form_cust, 
-        "weight": st.session_state.form_w, 
-        "length": st.session_state.form_l, 
-        "breadth": st.session_state.form_b, 
-        "height": st.session_state.form_h, 
-        "s_mob": st.session_state.s_mob, 
-        "r_mob": st.session_state.r_mob, 
-        "pincode": st.session_state.r_pin
+        "tracking": tracking, "from": from_val, "to": to_val, "article": article,
+        "cod": st.session_state.get(f"cod_{rid}", "").strip(),
+        "cust_id": st.session_state.get("cust_shared", "").strip(),
+        "weight": st.session_state.get(f"w_{rid}", "").strip(),
+        "length": st.session_state.get(f"l_{rid}", "").strip(),
+        "breadth": st.session_state.get(f"b_{rid}", "").strip(),
+        "height": st.session_state.get(f"h_{rid}", "").strip(),
+        "s_mob": st.session_state.get(f"s_mob_{sid}", "").strip(),
+        "r_mob": st.session_state.get(f"r_mob_{rid}", "").strip(),
+        "pincode": st.session_state.get(f"r_pin_{rid}", "").strip()
     })
     
-    # Save Barcode Increment to DB
     current_u = st.session_state.username
     db = load_data()
-    db["users"][current_u]["used_barcodes"].append(tracking_id)
-    db["users"][current_u]["barcodes"][pool_key]["current"] = current_serial + 1
+    db["users"][current_u]["used_barcodes"].append(tracking)
+    db["users"][current_u]["barcodes"][pkey]["current"] = serial + 1
     save_data(db)
     
-    # SAFE WIPE OF RECIPIENT FIELDS IN BACKGROUND MEMORY
-    st.session_state.r_addr = ""
-    st.session_state.r_mob = ""
-    st.session_state.r_pin = ""
-    st.session_state.form_w = ""
-    st.session_state.form_l = ""
-    st.session_state.form_b = ""
-    st.session_state.form_h = ""
-    st.session_state.form_cod = ""
-    st.session_state.form_cust = ""
-    
-    st.session_state.stage_msg = ("success", "Staged successfully! Ready for the next parcel.")
+    # MAGIC: Instantly clears recipient fields by rolling the ID forward, ignoring the old values entirely!
+    st.session_state.r_id += 1 
+    st.session_state.stage_succ = "Staged successfully! Ready for the next recipient."
 
+# Load Database Cache
+pincode_lookup_db = load_pincode_database_records()
 
 # --- AUTHENTICATION ---
 if not st.session_state.authenticated:
@@ -443,7 +432,7 @@ with col_logout_wrap[1]:
         st.session_state.clear()
         st.rerun()
 
-# --- USER NOTIFICATION ALERT SYSTEM ---
+# --- NOTIFICATIONS ---
 if current_user.lower() != "admin":
     my_unread_msgs = [m for m in db.get("messages", []) if m.get("to") == current_user and m.get("status") == "unread"]
     if my_unread_msgs:
@@ -483,17 +472,18 @@ with tabs[0]:
             col_w_in, col_h_in = st.columns(2)
             with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
             with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
-                
-            saved_addresses = user_profile.get("addresses", [])
-            st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile_action)
             
-            # --- TEXT AREAS COUPLED TO ON_CHANGE AUTO FILL ---
-            st.text_area("Sender 'From' Address Details", key="s_addr", on_change=update_s_data)
+            # --- DYNAMIC SENDER COMPARTMENT ---
+            s_id = st.session_state.s_id
+            saved_addresses = user_profile.get("addresses", [])
+            st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile)
+            
+            st.text_area("Sender 'From' Address Details", key=f"s_addr_{s_id}", on_change=s_addr_changed)
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
                 if st.button("💾 Remember Address", use_container_width=True):
-                    val = st.session_state.s_addr.strip()
+                    val = st.session_state.get(f"s_addr_{s_id}", "").strip()
                     if val and val not in user_profile["addresses"]:
                         db["users"][current_user]["addresses"].append(val)
                         save_data(db)
@@ -508,28 +498,29 @@ with tabs[0]:
                         st.session_state.load_profile_dd = "-- Select Profile --"
                         st.warning("Address profile removed.")
                         st.rerun()
-                    
-            st.text_area("Recipient 'To' Address Details", key="r_addr", on_change=update_r_data)
+            
+            # --- DYNAMIC RECIPIENT COMPARTMENT ---
+            r_id = st.session_state.r_id
+            st.text_area("Recipient 'To' Address Details", key=f"r_addr_{r_id}", on_change=r_addr_changed)
             
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
             
-            if "COD" in article_type: 
-                st.text_input("Collect on Delivery (COD) Amount (₹)", key="form_cod")
-            st.text_input("India Post Customer Business ID", key="form_cust")
+            if "COD" in article_type: st.text_input("Collect on Delivery (COD) Amount (₹)", key=f"cod_{r_id}")
+            st.text_input("India Post Customer Business ID", key="cust_shared")
             
             st.write("**Volumetric Specifications (Optional)**")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: st.text_input("Weight (g)", key="form_w")
-            with col_m2: st.text_input("Len (cm)", key="form_l")
-            with col_m3: st.text_input("Wid (cm)", key="form_b")
-            with col_m4: st.text_input("Hgt (cm)", key="form_h")
+            with col_m1: st.text_input("Weight (g)", key=f"w_{r_id}")
+            with col_m2: st.text_input("Len (cm)", key=f"l_{r_id}")
+            with col_m3: st.text_input("Wid (cm)", key=f"b_{r_id}")
+            with col_m4: st.text_input("Hgt (cm)", key=f"h_{r_id}")
                 
             col_mob1, col_mob2 = st.columns(2)
-            with col_mob1: st.text_input("Sender Mobile (Optional)", key="s_mob")
-            with col_mob2: st.text_input("Receiver Mobile (Optional)", key="r_mob")
+            with col_mob1: st.text_input("Sender Mobile (Optional)", key=f"s_mob_{s_id}")
+            with col_mob2: st.text_input("Receiver Mobile (Optional)", key=f"r_mob_{r_id}")
                 
             col_pin1, col_pin2 = st.columns(2)
-            with col_pin1: st.text_input("Extracted Pincode (Optional)", key="r_pin")
+            with col_pin1: st.text_input("Extracted Pincode (Optional)", key=f"r_pin_{r_id}")
             with col_pin2: st.write("")
 
             shared_pool_key = get_pool_key(article_type)
@@ -554,19 +545,14 @@ with tabs[0]:
                 if auto_tracking: st.info(f"Next S10 Tracking ID: **{auto_tracking}**")
                 else: st.error("❌ Barcode Pool Depleted! Update configuration strings.")
 
-            if st.session_state.stage_msg:
-                m_type, text = st.session_state.stage_msg
-                if m_type == "error": st.error(text)
-                else: st.success(text)
-                st.session_state.stage_msg = None
+            if st.session_state.stage_err:
+                st.error(st.session_state.stage_err)
+                st.session_state.stage_err = ""
+            if st.session_state.stage_succ:
+                st.success(st.session_state.stage_succ)
+                st.session_state.stage_succ = ""
 
-            # THE BUTTON: Safely triggers background clearance logic BEFORE UI redraws
-            st.button(
-                "➕ Stage to Batch Allocation Queue", 
-                type="primary", 
-                on_click=stage_parcel_action, 
-                args=(auto_tracking, article_type, shared_pool_key, current_serial_8)
-            )
+            st.button("➕ Stage to Batch Allocation Queue", type="primary", on_click=execute_stage, args=(auto_tracking, article_type, shared_pool_key, current_serial_8))
 
     with col_preview:
         with st.container(border=True):
@@ -814,10 +800,8 @@ if current_user.lower() == "admin":
                     st.error("Message cannot be blank.")
                     
             st.markdown("---")
-            
             col_msg_head1, col_msg_head2 = st.columns([0.75, 0.25])
-            with col_msg_head1:
-                st.markdown("### 📥 User Replies & History")
+            with col_msg_head1: st.markdown("### 📥 User Replies & History")
             with col_msg_head2:
                 if st.button("🗑️ Clear All History", type="primary"):
                     db["messages"] = []
