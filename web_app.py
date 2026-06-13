@@ -1,76 +1,783 @@
 import streamlit as st
 import openpyxl
 import os
+import sys
 import json
+import time
 import io
+import base64
 import re
 import pandas as pd
 from barcode import Code128
 from barcode.writer import ImageWriter
+from PIL import Image, ImageDraw, ImageFont
 
-# --- CONFIG ---
+# --- SYSTEM DIRECTORY SETUP ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.path.join(BASE_DIR, "web_postal_data.json")
 
-# --- CACHED DATABASE ---
-@st.cache_data
-def get_pincode_db():
-    path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
-    if not os.path.exists(path): return {}
-    df = pd.read_csv(path, dtype={'pincode': str})
-    df.columns = [c.lower().strip() for c in df.columns]
-    return df.drop_duplicates(subset=['pincode'], keep='first').set_index('pincode').to_dict(orient='index')
+DISPATCH_ARTICLES = [
+    "Speed Post Parcel", 
+    "Indiapost Parcel Retail", 
+    "Business Parcel", 
+    "Speed Post Parcel COD", 
+    "Business Parcel COD"
+]
 
-# --- LOGIC ---
-def extract_info(text):
-    pin, mob = "", ""
+BARCODE_POOL_KEYS = [
+    "Speed Post Parcel (Regular & COD Shared Pool)",
+    "Indiapost Parcel Retail",
+    "Business Parcel",
+    "Business Parcel COD"
+]
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {"users": {}}
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
+
+def get_pool_key(article_type):
+    if article_type in ["Speed Post Parcel", "Speed Post Parcel COD"]:
+        return "Speed Post Parcel (Regular & COD Shared Pool)"
+    return article_type
+
+# --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
+def calculate_upu_s10_check_digit(serial_8_digits):
+    """Calculates the 9th digit using the Weighted Modulo 11 algorithm"""
+    serial_str = f"{int(serial_8_digits):08d}"
+    digits = [int(d) for d in serial_str]
+    weights = [8, 6, 4, 2, 3, 5, 9, 7]
+    total_sum = sum(d * w for d, w in zip(digits, weights))
+    remainder = total_sum % 11
+    c = 11 - remainder
+    if c == 10: return "0"
+    elif c == 11: return "5"
+    else: return str(c)
+
+# --- TEXT WRAPPING ENGINE ---
+def wrap_text_to_pixels(text, draw, font, max_width):
+    text_str = str(text)
+    lines = []
+    for p in text_str.split('\n'):
+        words = p.split(' ')
+        current_line = ""
+        for word in words:
+            test_line = current_line + " " + word if current_line else word
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            w = bbox[2] - bbox[0]
+            if w <= max_width: 
+                current_line = test_line
+            else:
+                if current_line: lines.append(current_line)
+                current_line = word
+        if current_line: lines.append(current_line)
+    return '\n'.join(lines)
+
+# --- INTELLIGENT DATA EXTRACTION ENGINE ---
+def extract_pincode_and_mobile(text):
+    pincode = ""
+    mobile = ""
+    if not text:
+        return pincode, mobile
     chunks = re.findall(r'\+?\d+', text)
     for chunk in chunks:
-        d = chunk.replace('+', '')
-        if len(d) == 6: pin = d
-        elif len(d) in [10, 11, 12, 13]: mob = d[-10:]
-    return pin, mob
+        digits_only = chunk.replace('+', '')
+        if len(digits_only) == 6:
+            pincode = digits_only
+        elif len(digits_only) == 10:
+            mobile = digits_only
+        elif len(digits_only) in [11, 12, 13]:
+            mobile = digits_only[-10:]
+    return pincode, mobile
 
-# --- CALLBACKS ---
-def update_recipient():
-    pin, mob = extract_info(st.session_state.r_addr)
-    st.session_state.auto_pin = pin
-    st.session_state.auto_mob = mob
+# --- ULTRA HIGH-SPEED CACHED GLOBAL DATABASE LOADING ENGINE ---
+@st.cache_data
+def load_pincode_database_records():
+    csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
+    if not os.path.exists(csv_path):
+        return {}
+    try:
+        df = pd.read_csv(csv_path, usecols=['pincode', 'district', 'statename'], dtype={'pincode': str})
+        df.columns = [c.lower().strip() for c in df.columns]
+        df['pincode'] = df['pincode'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        
+        # Select the first row if a pincode maps to duplicate rows in the directory dataset
+        df_unique = df.drop_duplicates(subset=['pincode'], keep='first')
+        return df_unique.set_index('pincode').to_dict(orient='index')
+    except:
+        return {}
 
-def update_sender():
-    _, mob = extract_info(st.session_state.s_addr)
-    st.session_state.auto_s_mob = mob
+# --- EXCEL EXPORT NUMERIC FORMAT FORCING CONVERTER ---
+def safe_numeric(val):
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        if '.' in s:
+            return float(s)
+        return int(s)
+    except:
+        return s
 
-# --- APP ---
-st.set_page_config(layout="wide")
-pincode_db = get_pincode_db()
+# --- ADDRESS SEGMENT PARTITION COMPLIANCE ENGINE ---
+def split_address_to_lines(address_text):
+    lines = [line.strip() for line in str(address_text).split('\n') if line.strip()]
+    name = lines[0] if len(lines) > 0 else "CUSTOMER"
+    l1 = lines[1] if len(lines) > 1 else ""
+    l2 = lines[2] if len(lines) > 2 else ""
+    l3 = ", ".join(lines[3:]) if len(lines) > 3 else ""
+    
+    if not l1 and address_text:
+        flat = str(address_text).replace('\n', ', ')
+        name = flat[:40]
+        l1 = flat[40:90]
+        l2 = flat[90:140]
+        l3 = flat[140:190]
+    return name, l1, l2, l3
+
+# --- GENERATE SINGLE LABEL CANVAS HELPER ---
+def draw_single_label(entry, width_in, height_in):
+    DPI = 300
+    W_px = int(width_in * DPI)
+    H_px = int(height_in * DPI)
+    m_px = int(W_px * 0.05)
+    
+    bc_buffer = io.BytesIO()
+    my_barcode = Code128(entry['tracking'], writer=ImageWriter())
+    my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
+    bc_buffer.seek(0)
+    bc_img = Image.open(bc_buffer)
+    
+    lbl_canvas = Image.new('RGB', (W_px, H_px), color='white')
+    draw = ImageDraw.Draw(lbl_canvas)
+    scale = min(W_px, H_px)
+    
+    size_l = max(36, int(scale * 0.058))
+    size_m = max(28, int(scale * 0.044))
+    size_b = max(32, int(scale * 0.048))
+    size_bc_text = max(30, int(scale * 0.046))
+    
+    try:
+        f_l = ImageFont.load_default(size=size_l)
+        f_m = ImageFont.load_default(size=size_m)
+        f_b = ImageFont.load_default(size=size_b)
+        f_bc = ImageFont.load_default(size=size_bc_text)
+    except:
+        f_l = f_m = f_b = f_bc = ImageFont.load_default()
+        
+    top_strings = [f"ARTICLE: {entry['article']}"]
+    if entry.get('cust_id'): top_strings.append(f"CUST ID: {entry['cust_id']}")
+    if entry.get('cod'): top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
+    
+    if W_px >= H_px:  # LANDSCAPE MODE
+        bc_h_scaled = int(H_px * 0.13)
+        bc_w_scaled = int(W_px * 0.65)
+        bc_y_pos = H_px - bc_h_scaled - m_px - int(H_px * 0.05)
+        col_width = (W_px - (3 * m_px)) // 2
+        
+        y_left = m_px
+        for line in top_strings:
+            draw.text((m_px, y_left), line, fill="black", font=f_b)
+            b_box = draw.textbbox((0,0), line, font=f_b)
+            y_left += (b_box[3] - b_box[1]) + int(H_px * 0.015)
+            
+        y_left += int(H_px * 0.02)
+        draw.text((m_px, y_left), "FROM:", fill="black", font=f_b)
+        y_left += int(size_b * 1.2)
+        
+        w_from = wrap_text_to_pixels(entry['from'], draw, f_m, col_width)
+        draw.multiline_text((m_px, y_left), w_from, fill="black", font=f_m, spacing=8)
+        
+        x_right = m_px + col_width + m_px
+        y_right = m_px
+        draw.text((x_right, y_right), "TO:", fill="black", font=f_b)
+        y_right += int(size_b * 1.2)
+        
+        w_to = wrap_text_to_pixels(entry['to'], draw, f_l, col_width)
+        draw.multiline_text((x_right, y_right), w_to, fill="black", font=f_l, spacing=8)
+        
+        bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
+        lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
+    else:  # PORTRAIT MODE
+        use_w = W_px - (2 * m_px)
+        bc_h_scaled = int(H_px * 0.11)
+        bc_w_scaled = int(W_px * 0.75)
+        bc_y_pos = H_px - bc_h_scaled - m_px - int(H_px * 0.05)
+        
+        y_curr = m_px
+        for line in top_strings:
+            draw.text((m_px, y_curr), line, fill="black", font=f_b)
+            b_box = draw.textbbox((0,0), line, font=f_b)
+            y_curr += (b_box[3] - b_box[1]) + int(H_px * 0.012)
+            
+        y_curr += int(H_px * 0.02)
+        draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
+        y_curr += int(size_b * 1.2)
+        
+        w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
+        draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=8)
+        b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=8)
+        y_cursor_from = b_box[3] + int(H_px * 0.04)
+        
+        draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
+        y_cursor_from += int(size_b * 1.2)
+        
+        w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
+        draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=8)
+        
+        bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
+        lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
+        
+    bbox_bc = draw.textbbox((0, 0), entry['tracking'], font=f_bc)
+    text_bc_w = bbox_bc[2] - bbox_bc[0]
+    draw.text(((W_px - text_bc_w) // 2, bc_y_pos + bc_h_scaled + int(H_px * 0.012)), entry['tracking'], fill="black", font=f_bc)
+        
+    return lbl_canvas
+
+# --- PREMIUM BASE64 IMAGE ENCODER ---
+def get_base64_image(image_path):
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
+
+# --- STYLING & FLOATING WHATSAPP BUTTON ---
+st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
+bg_file_path = os.path.join(BASE_DIR, "background.png")
+
+whatsapp_html = """
+    <a href="https://wa.me/918075386388" target="_blank" class="whatsapp-float">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="margin-right: 8px; display: inline-block; vertical-align: middle;">
+            <path d="M13.601 2.326A7.85 7.85 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.9 7.9 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.9 7.9 0 0 0 13.6 2.326zM7.994 14.521a6.6 6.6 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c1.11-4.285 4.564-6.574 8.718-6.574a6.58 6.58 0 0 1 4.66 2.72 6.58 6.58 0 0 1 1.936 4.663c-.004 4.2-3.563 7.759-7.923 7.759M11.57 9.447c-.19-.094-1.127-.556-1.301-.62-.174-.064-.3-.094-.426.094-.126.188-.488.62-.6.749-.113.128-.226.144-.417.05-.19-.095-.807-.296-1.536-.855-.567-.457-.951-1.022-1.062-1.116-.112-.094-.012-.145.083-.242.085-.087.174-.188.26-.283.085-.087.174-.188.26-.283.087-.095.116-.16.174-.319.059-.158.03-.3-.015-.394-.045-.094-.426-1.026-.583-1.409-.153-.367-.307-.317-.418-.317-.109-.004-.234-.004-.36-.004a.69.69 0 0 0-.5.234c-.174.188-.665.65-0.665 1.583s.678 1.834.773 1.96c.095.127 1.332 2.035 3.226 2.856.45.195.8.311 1.075.398.452.144.863.124 1.189.062.363-.069 1.127-.461 1.284-.906.158-.444.158-.825.11-1.013-.048-.19-.174-.3-.365-.394"/>
+        </svg>Contact Us
+    </a>
+"""
+
+if os.path.exists(bg_file_path):
+    encoded_bg = get_base64_image(bg_file_path)
+    st.markdown(f"""
+        <style>
+            .stApp {{ background-image: url("data:image/png;base64,{encoded_bg}"); background-size: cover; background-position: center; background-attachment: fixed; }}
+            div[data-testid="stHeader"] {{ background: transparent !important; }}
+            .stTextInput input, .stTextArea textarea, .stSelectbox div {{ border-color: #cbd5e1 !important; background-color: #ffffff !important; color: #0f172a !important; }}
+            div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
+            div.stButton > button[type="primary"]:hover {{ background-color: #bd0000 !important; }}
+            .whatsapp-float {{
+                position: fixed; bottom: 24px; right: 24px; background-color: #25d366; color: white !important;
+                padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: 'Segoe UI', sans-serif;
+                font-weight: 700; font-size: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.22); z-index: 99999;
+                display: inline-flex; align-items: center; transition: transform 0.2s ease, background-color 0.2s ease;
+            }}
+            .whatsapp-float:hover {{ background-color: #1ebd58; transform: scale(1.05); }}
+        </style>
+        {whatsapp_html}
+    """, unsafe_allow_html=True)
+else:
+    st.markdown(f"""
+        <style>
+            .stApp {{ background-color: #fdfbf7; }}
+            div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; }}
+            .whatsapp-float {{
+                position: fixed; bottom: 24px; right: 24px; background-color: #25d366; color: white !important;
+                padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: sans-serif;
+                font-weight: 700; font-size: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.22); z-index: 99999;
+                display: inline-flex; align-items: center; transition: transform 0.2s ease;
+            }}
+            .whatsapp-float:hover {{ transform: scale(1.05); }}
+        </style>
+        {whatsapp_html}
+    """, unsafe_allow_html=True)
+
+# --- STREAMLIT STATE INITIALIZATION ---
+if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-st.title("📮 Dispatch Manager")
-col1, col2 = st.columns(2)
+# --- SAFE MEMORY STATE HOLDERS ---
+if 's_from_val' not in st.session_state: st.session_state.s_from_val = ""
+if 's_mob_val' not in st.session_state: st.session_state.s_mob_val = ""
+if 'r_to_val' not in st.session_state: st.session_state.r_to_val = ""
+if 'r_mob_val' not in st.session_state: st.session_state.r_mob_val = ""
+if 'r_pin_val' not in st.session_state: st.session_state.r_pin_val = ""
 
-with col1:
-    s_addr = st.text_area("Sender Address", key="s_addr", on_change=update_sender)
-    s_mob = st.text_input("Sender Mobile", value=st.session_state.get("auto_s_mob", ""))
+# Load Master Pincode Dictionary into Memory Cache
+pincode_lookup_db = load_pincode_database_records()
 
-with col2:
-    r_addr = st.text_area("Recipient Address", key="r_addr", on_change=update_recipient)
-    r_mob = st.text_input("Receiver Mobile", value=st.session_state.get("auto_mob", ""))
-    r_pin = st.text_input("Pincode", value=st.session_state.get("auto_pin", ""))
+# --- ATOMIC REACTION ACTION LISTENERS ---
+def handle_quick_load_address_profile():
+    choice = st.session_state.address_quick_selector
+    if choice != "-- Select Profile --":
+        st.session_state.s_from_val = choice
+        _, ext_s_mobile = extract_pincode_and_mobile(choice)
+        st.session_state.s_mob_val = ext_s_mobile if ext_s_mobile else ""
 
-if st.button("Stage Parcel"):
-    st.session_state.web_queue.append({
-        "from": s_addr, "to": r_addr, "s_mob": s_mob, "r_mob": r_mob, "pin": r_pin
-    })
-    st.success("Staged!")
+def sync_sender_address_data():
+    txt = st.session_state.from_address_input_widget
+    st.session_state.s_from_val = txt
+    _, ext_s_mobile = extract_pincode_and_mobile(txt)
+    if ext_s_mobile:
+        st.session_state.s_mob_val = ext_s_mobile
 
-if st.button("Compile Manifest"):
-    wb = openpyxl.load_workbook(os.path.join(BASE_DIR, "New Format bulk.xlsx"))
-    ws = wb.active
-    next_row = ws.max_row + 1
-    for entry in st.session_state.web_queue:
-        pin_d = pincode_db.get(str(entry['pin']).strip(), {})
-        # Map your columns here using ws.cell(row=next_row, column=X, value=...)
-        next_row += 1
-    buf = io.BytesIO()
-    wb.save(buf)
-    st.download_button("Download Excel", buf.getvalue(), "Manifest.xlsx")
+def sync_recipient_address_data():
+    txt = st.session_state.to_address_input_widget
+    st.session_state.r_to_val = txt
+    ext_r_pincode, ext_r_mobile = extract_pincode_and_mobile(txt)
+    st.session_state.r_pin_val = ext_r_pincode
+    st.session_state.r_mob_val = ext_r_mobile
+
+# --- AUTHENTICATION SCREEN ---
+if not st.session_state.authenticated:
+    st.markdown("""
+        <div style="text-align: left; margin-top: 15px; margin-bottom: 25px; font-family: 'Segoe UI', system-ui, sans-serif;">
+            <h1 style="color: #9c0000; font-size: 3.4rem; font-weight: 800; margin: 0; line-height: 1.1; letter-spacing: -0.5px;">India Post</h1>
+            <h2 style="color: #334155; font-size: 1.9rem; font-weight: 600; margin-top: 4px; margin-bottom: 8px; opacity: 0.95;">Enterprise Web Portal</h2>
+            <p style="color: #b45309; font-size: 0.95rem; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; margin: 0; opacity: 0.9;">Smart &bull; Secure &bull; Connected</p>
+        </div>
+        <div style="height: 1px; background: rgba(156, 0, 0, 0.15); margin-bottom: 30px;"></div>
+    """, unsafe_allow_html=True)
+
+    auth_cols = st.columns([0.4, 0.6])
+    with auth_cols[0]:
+        with st.container(border=True):
+            auth_mode = st.radio("Access Control Node", ["Login to Existing Profile", "Register New Corporate Profile"])
+            
+            if auth_mode == "Login to Existing Profile":
+                st.markdown("<h4 style='color:#9c0000; margin-top:10px;'>🔐 Sign In</h4>", unsafe_allow_html=True)
+                user_id = st.text_input("User ID", key="login_uid").strip()
+                password = st.text_input("Password", type="password", key="login_pwd").strip()
+                if st.button("Verify & Enter Portal", type="primary", use_container_width=True):
+                    if not user_id or not password:
+                        st.error("Please enter both User ID and Password fields.")
+                    else:
+                        data = load_data()
+                        if user_id in data["users"] and data["users"][user_id]["password"] == password:
+                            if data["users"][user_id].get("status", "active") == "locked":
+                                st.error("❌ Access Exception: This profile node has been locked by the administration.")
+                            else:
+                                st.session_state.authenticated = True
+                                st.session_state.username = user_id
+                                st.rerun()
+                        else:
+                            st.error("Invalid User ID or Password verification mismatch.")
+                            
+            else:
+                st.markdown("<h4 style='color:#9c0000; margin-top:10px;'>📝 Register Profile</h4>", unsafe_allow_html=True)
+                reg_name = st.text_input("Full Name / Company Name").strip()
+                reg_email = st.text_input("Email ID").strip()
+                reg_mobile = st.text_input("Mobile Number").strip()
+                user_id = st.text_input("Create User ID", key="reg_uid").strip()
+                password = st.text_input("Create Password", type="password", key="reg_pwd").strip()
+                
+                if st.button("Register Infrastructure Profile", type="primary", use_container_width=True):
+                    if not reg_name or not reg_email or not reg_mobile or not user_id or not password:
+                        st.error("All registration field inputs are mandatory values.")
+                    else:
+                        data = load_data()
+                        if user_id in data["users"]:
+                            st.error("This User ID is already occupied.")
+                        else:
+                            data["users"][user_id] = {
+                                "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
+                                "status": "active", "addresses": [], "used_barcodes": [], "generated_labels": [],
+                                "barcodes": {pool_key: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for pool_key in BARCODE_POOL_KEYS}
+                            }
+                            save_data(data)
+                            st.success("Registration success! Please log in.")
+    st.stop()
+
+# --- ENTERPRISE INTERFACE DASHBOARD ---
+current_user = st.session_state.username
+db = load_data()
+user_profile = db["users"][current_user]
+
+if "used_barcodes" not in user_profile: user_profile["used_barcodes"] = []
+if "generated_labels" not in user_profile: user_profile["generated_labels"] = []
+if "barcodes" not in user_profile: user_profile["barcodes"] = {}
+
+for pk in BARCODE_POOL_KEYS:
+    if pk not in user_profile["barcodes"]:
+        user_profile["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
+
+col_logout_wrap = st.columns([0.80, 0.20])
+with col_logout_wrap[0]:
+    st.markdown(f"<h4 style='margin:0; color:#1e293b; font-weight: 600;'>📋 Active Client: {user_profile.get('name', current_user)} | Node ID: `{current_user}`</h4>", unsafe_allow_html=True)
+with col_logout_wrap[1]:
+    if st.button("Core Log Out", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.username = ""
+        st.session_state.web_queue = []
+        if 'pdf_ready' in st.session_state: del st.session_state.pdf_ready
+        if 'excel_ready' in st.session_state: del st.session_state.excel_ready
+        st.rerun()
+
+tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 Generated Labels"]
+if current_user.lower() == "admin": 
+    tabs_list.append("👥 Admin Panel")
+tabs = st.tabs(tabs_list)
+
+# --- TAB 1: DISPATCH MANAGER ---
+with tabs[0]:
+    col_inputs, col_preview = st.columns([0.48, 0.52])
+    
+    with col_inputs:
+        with st.container(border=True):
+            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>📦 Shipment Properties</h4>", unsafe_allow_html=True)
+            col_w_in, col_h_in = st.columns(2)
+            with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
+            with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
+                
+            saved_addresses = user_profile.get("addresses", [])
+            selected_saved = st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="address_quick_selector", on_change=handle_quick_load_address_profile)
+            
+            # Pure decoupled stationary field layout
+            from_address = st.text_area("Sender 'From' Address Details", value=st.session_state.s_from_val, key="from_address_input_widget", on_change=sync_sender_address_data)
+            
+            col_addr_actions = st.columns(2)
+            with col_addr_actions[0]:
+                if st.button("💾 Remember Address", use_container_width=True):
+                    if from_address and from_address not in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].append(from_address)
+                        save_data(db)
+                        st.success("Address profile recorded.")
+                        st.rerun()
+            with col_addr_actions[1]:
+                if st.button("🗑️ Delete Address", use_container_width=True):
+                    if selected_saved != "-- Select Profile --" and selected_saved in user_profile["addresses"]:
+                        db["users"][current_user]["addresses"].remove(selected_saved)
+                        save_data(db)
+                        st.warning("Address profile removed.")
+                        st.rerun()
+                    
+            to_address = st.text_area("Recipient 'To' Address Details", value=st.session_state.r_to_val, key="to_address_input_widget", on_change=sync_recipient_address_data)
+            
+            article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
+            
+            cod_amount = ""
+            if "COD" in article_type: cod_amount = st.text_input("Collect on Delivery (COD) Amount (₹)")
+            customer_id = st.text_input("India Post Customer Business ID")
+            
+            st.write("**Volumetric Specifications (Optional)**")
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1: weight = st.text_input("Weight (g)")
+            with col_m2: length = st.text_input("Len (cm)")
+            with col_m3: breadth = st.text_input("Wid (cm)")
+            with col_m4: height_metric = st.text_input("Hgt (cm)")
+                
+            col_mob1, col_mob2 = st.columns(2)
+            with col_mob1: 
+                s_mob = st.text_input("Sender Mobile (Optional)", value=st.session_state.s_mob_val, key="s_mob_field")
+            with col_mob2: 
+                r_mob = st.text_input("Receiver Mobile (Optional)", value=st.session_state.r_mob_val, key="r_mob_field")
+                
+            col_pin1, col_pin2 = st.columns(2)
+            with col_pin1:
+                pin_code = st.text_input("Extracted Pincode (Optional)", value=st.session_state.r_pin_val, key="r_pin_field")
+            with col_pin2:
+                st.write("")
+
+            shared_pool_key = get_pool_key(article_type)
+            b_current = user_profile["barcodes"][shared_pool_key]
+            used_set = set(user_profile.get("used_barcodes", []))
+            queue_set = {item["tracking"] for item in st.session_state.web_queue}
+
+            if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
+                st.error(f"❌ Shared series empty! Configure ranges for: {shared_pool_key}")
+                auto_tracking = None
+            else:
+                current_serial_8 = int(b_current["current"])
+                auto_tracking = None
+                while current_serial_8 <= int(b_current["end"]):
+                    check_digit = calculate_upu_s10_check_digit(current_serial_8)
+                    test_tracking = f"{b_current['prefix']}{current_serial_8:08d}{check_digit}{b_current['suffix']}"
+                    if test_tracking not in used_set and test_tracking not in queue_set:
+                        auto_tracking = test_tracking
+                        break
+                    current_serial_8 += 1
+                
+                if auto_tracking:
+                    st.info(f"Next S10 Tracking ID: **{auto_tracking}**")
+                    b_current["current"] = current_serial_8
+                else:
+                    st.error("❌ Barcode Pool Depleted! Update configuration strings.")
+
+            if st.button("➕ Stage to Batch Allocation Queue", type="primary"):
+                if not from_address or not to_address or not auto_tracking:
+                    st.error("From Address, To Address, and a valid Tracking ID range are mandatory.")
+                else:
+                    st.session_state.web_queue.append({
+                        "tracking": auto_tracking, "from": from_address, "to": to_address, "article": article_type,
+                        "cod": cod_amount, "cust_id": customer_id, 
+                        "weight": weight if weight else "", "length": length if length else "", 
+                        "breadth": breadth if breadth else "", "height": height_metric if height_metric else "", 
+                        "s_mob": s_mob, "r_mob": r_mob, "pincode": pin_code
+                    })
+                    db["users"][current_user]["used_barcodes"].append(auto_tracking)
+                    db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
+                    save_data(db)
+                    
+                    # Direct value stream wipe clears the view instantly on reload
+                    st.session_state.r_to_val = ""
+                    st.session_state.r_mob_val = ""
+                    st.session_state.r_pin_val = ""
+                    st.success("Staged successfully into batch pipelines!")
+                    st.rerun()
+
+    with col_preview:
+        with st.container(border=True):
+            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⏳ Staged Processing Queue</h4>", unsafe_allow_html=True)
+            if st.session_state.web_queue:
+                display_df = pd.DataFrame(st.session_state.web_queue)[["tracking", "article", "weight", "cust_id"]]
+                st.dataframe(display_df, use_container_width=True)
+                if st.button("🗑️ Wipe Entire Active Session Queue"):
+                    st.session_state.web_queue = []
+                    st.rerun()
+                    
+                st.write("---")
+                st.subheader("Compile Outputs")
+                
+                if st.button("⚙️ Compile Label PDFs & Sync Template Matrix", type="primary"):
+                    pdf_pages = []
+                    template_filename = os.path.join(BASE_DIR, "New Format bulk.xlsx")
+                    if not os.path.exists(template_filename):
+                        template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
+                        
+                    if not os.path.exists(template_filename):
+                        st.error("CRITICAL: Master template tracking sheet asset missing from directory.")
+                    else:
+                        wb = openpyxl.load_workbook(template_filename)
+                        ws = wb.active
+                        next_row = ws.max_row + 1
+                        
+                        for idx, entry in enumerate(st.session_state.web_queue):
+                            lbl_canvas = draw_single_label(entry, width_in, height_in)
+                            pdf_pages.append(lbl_canvas)
+                            
+                            # --- AUTOMATED DATABASE LOOKUPS ---
+                            r_pin = str(entry.get('pincode', '')).strip().split('.')[0]
+                            r_pin_details = pincode_lookup_db.get(r_pin, {"district": "", "statename": ""})
+                            r_name, r_l1, _, _ = split_address_to_lines(entry['to'])
+                            
+                            s_pin, _ = extract_pincode_and_mobile(entry['from'])
+                            s_pin_clean = str(s_pin).strip().split('.')[0]
+                            s_pin_details = pincode_lookup_db.get(s_pin_clean, {"district": "", "statename": ""})
+                            _, s_l1, s_l2, _ = split_address_to_lines(entry['from'])
+                            
+                            # --- CORE SPREADSHEET CELL MATRIX EXACT ALPHANUMERIC COLUMN INJECTIONS ---
+                            ws.cell(row=next_row, column=1, value=idx + 1)                                       # A: SERIAL NUMBER
+                            ws.cell(row=next_row, column=2, value=entry['tracking'])                             # B: BARCODE NO
+                            ws.cell(row=next_row, column=3, value=safe_numeric(entry['weight']))                 # C: PHYSICAL WEIGHT [Forced Numeric]
+                            ws.cell(row=next_row, column=4, value="FALSE")                                       # D: REG [Rule 1]
+                            ws.cell(row=next_row, column=5, value="FALSE")                                       # E: OTP [Rule 1]
+                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', ''))             # F: RECEIVER CITY [Rule 2]
+                            ws.cell(row=next_row, column=7, value=r_pin)                                         # G: RECEIVER PINCODE
+                            ws.cell(row=next_row, column=8, value=r_name)                                        # H: RECEIVER NAME
+                            ws.cell(row=next_row, column=9, value=r_l1)                                          # I: RECEIVER ADD LINE 1
+                            ws.cell(row=next_row, column=10, value=r_pin_details.get('district', ''))            # J: RECEIVER ADD LINE 2 [Rule 3]
+                            ws.cell(row=next_row, column=11, value=r_pin_details.get('statename', ''))           # K: RECEIVER ADD LINE 3 [Rule 3]
+                            ws.cell(row=next_row, column=12, value="FALSE")                                      # L: ACK [Rule 4]
+                            ws.cell(row=next_row, column=13, value=entry['s_mob'])                               # M: SENDER MOBILE NO
+                            ws.cell(row=next_row, column=14, value=entry['r_mob'])                               # N: RECEIVER MOBILE NO
+                            
+                            if "COD" in entry['article']:
+                                ws.cell(row=next_row, column=17, value="COD")                              # Q: CODR/COD flag
+                                ws.cell(row=next_row, column=18, value=safe_numeric(entry['cod']))               # R: VALUE FOR CODR/COD
+                                
+                            ws.cell(row=next_row, column=21, value="NROL")                                       # U: SHAPE OF ARTICLE [Rule 5]
+                            ws.cell(row=next_row, column=22, value=safe_numeric(entry['length']))                # V: LENGTH [Forced Numeric]
+                            ws.cell(row=next_row, column=23, value=safe_numeric(entry['breadth']))               # W: BREADTH/DIAMETER [Forced Numeric]
+                            ws.cell(row=next_row, column=24, value=safe_numeric(entry['height']))                # X: HEIGHT [Forced Numeric]
+                            ws.cell(row=next_row, column=25, value="FALSE")                                      # Y: PRIORITY FLAG [Rule 6]
+                            
+                            ws.cell(row=next_row, column=29, value=user_profile.get('name', current_user))       # AC: SENDER NAME
+                            ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))            # AE: SENDER CITY [Rule 7]
+                            ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))           # AF: SENDER STATE/UT [Rule 7]
+                            ws.cell(row=next_row, column=33, value=s_pin_clean)                                  # AG: SENDER PINCODE
+                            ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))           # AM: RECEIVER STATE/UT [Rule 8]
+                            ws.cell(row=next_row, column=44, value="FALSE")                                      # AR: ALT ADDRESS FLAG [Rule 9]
+                            ws.cell(row=next_row, column=45, value="RMGK REF")                                   # AS: BULK REFERENCE [Rule 10]
+                            
+                            ws.cell(row=next_row, column=46, value=s_l1)                                         # AT: SENDER ADD LINE 1
+                            ws.cell(row=next_row, column=47, value=s_l2)                                         # AU: SENDER ADD LINE 2
+                            ws.cell(row=next_row, column=48, value=s_pin_details.get('statename', ''))           # AV: SENDER ADD LINE 3 [Rule 11]
+                            
+                            next_row += 1
+                            user_profile["generated_labels"].append(entry)
+                            
+                        db["users"][current_user] = user_profile
+                        save_data(db)
+                        
+                        pdf_buffer = io.BytesIO()
+                        pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
+                        st.session_state.pdf_ready = pdf_buffer.getvalue()
+                        
+                        excel_buffer = io.BytesIO()
+                        wb.save(excel_buffer)
+                        st.session_state.excel_ready = excel_buffer.getvalue()
+                        st.session_state.web_queue = [] 
+                        st.success("Compilation complete! Web download links active.")
+                        st.rerun()
+            else:
+                st.info("The dispatch pipeline queue is currently clean.")
+
+            if 'pdf_ready' in st.session_state or 'excel_ready' in st.session_state:
+                st.write("---")
+                st.markdown("<h5 style='color:#9c0000; margin-top:0;'>📥 Generated Files Cache</h5>", unsafe_allow_html=True)
+                batch_timestamp = int(time.time())
+                
+                if 'pdf_ready' in st.session_state:
+                    st.download_button(label="📥 Download Consolidated Label PDF Bundle", data=st.session_state.pdf_ready, file_name=f"Compiled_Post_Labels_{batch_timestamp}.pdf", mime="application/pdf", use_container_width=True)
+                if 'excel_ready' in st.session_state:
+                    st.download_button(label="📥 Download Template Upload Ready Manifest", data=st.session_state.excel_ready, file_name=f"Bulk_Upload_Manifest_{batch_timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                
+                if st.button("🧹 Clear Download Cache History", use_container_width=True):
+                    if 'pdf_ready' in st.session_state: del st.session_state.pdf_ready
+                    if 'excel_ready' in st.session_state: del st.session_state.excel_ready
+                    st.rerun()
+
+# --- TAB 2: RANGE ALLOCATION SETTINGS ---
+with tabs[1]:
+    with st.container(border=True):
+        st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⚙️ UPU S10 Barcode Range Setup</h4>", unsafe_allow_html=True)
+        set_article = st.selectbox("Choose Target Allocation Track Key", BARCODE_POOL_KEYS, key="setup_art")
+        b_data = user_profile["barcodes"][set_article]
+        
+        col_p, col_st, col_en, col_su = st.columns(4)
+        with col_p: new_prefix = st.text_input("Prefix (2 Alpha)", value=b_data["prefix"], max_chars=2).upper()
+        with col_st: new_start = st.number_input("Start Serial (8 Digits)", value=int(b_data["current"]), step=1)
+        with col_en: new_end = st.number_input("End Serial (8 Digits)", value=int(b_data["end"]), step=1)
+        with col_su: new_suffix = st.text_input("Suffix (2 Alpha)", value=b_data["suffix"], max_chars=2).upper()
+        
+        if st.button("Save System Range Allocation", type="primary"):
+            db["users"][current_user]["barcodes"][set_article] = { "prefix": new_prefix, "current": new_start, "end": new_end, "suffix": new_suffix }
+            save_data(db)
+            st.success(f"Configured range assignment arrays for {set_article}!")
+            st.rerun()
+            
+        remaining = b_data["end"] - b_data["current"]
+        st.metric(label="Available Unused Serials Remaining", value=f"{max(0, remaining + 1) if b_data['end'] > 0 else 0} Units")
+
+# --- TAB 3: PERMANENT ARCHIVE (GENERATED LABELS) ---
+with tabs[2]:
+    with st.container(border=True):
+        st.markdown("<h4 style='color:#9c0000; margin-top:0;'>📇 Permanent Generated Labels Registry</h4>", unsafe_allow_html=True)
+        st.write("Complete history log of all generated dispatches on this profile node.")
+        
+        archive = user_profile.get("generated_labels", [])
+        
+        if not archive:
+            st.info("No labels have been permanently generated on this profile node yet.")
+        else:
+            for idx, item in enumerate(reversed(archive)):
+                real_idx = len(archive) - 1 - idx
+                
+                row_cols = st.columns([0.5, 0.25, 0.25])
+                with row_cols[0]:
+                    st.write(f"**Barcode:** `{item['tracking']}` | **Type:** {item['article']}")
+                    st.caption(f"**Recipient:** {item['to'].splitlines()[0][:35]}...")
+                    
+                with row_cols[1]:
+                    lbl_canvas = draw_single_label(item, width_in if 'width_in' in locals() else 6.0, height_in if 'height_in' in locals() else 4.0)
+                    reprint_buf = io.BytesIO()
+                    lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
+                    st.download_button(
+                        label=f"🖨️ Reprint PDF",
+                        data=reprint_buf.getvalue(),
+                        file_name=f"Reprint_Label_{item['tracking']}.pdf",
+                        mime="application/pdf",
+                        key=f"rep_{item['tracking']}_{real_idx}"
+                    )
+                    
+                with row_cols[2]:
+                    if st.button(f"🗑️ Delete Record", key=f"del_init_{real_idx}"):
+                        st.session_state[f"confirm_prompt_{real_idx}"] = True
+                
+                if st.session_state.get(f"confirm_prompt_{real_idx}", False):
+                    st.markdown(f"❓ **Do you want to reuse barcode `{item['tracking']}` in your available range stock?**")
+                    choice_cols = st.columns([0.3, 0.3, 0.4])
+                    
+                    with choice_cols[0]:
+                        if st.button("Yes (Return to Range)", key=f"re_yes_{real_idx}"):
+                            if item['tracking'] in user_profile["used_barcodes"]:
+                                user_profile["used_barcodes"].remove(item['tracking'])
+                            user_profile["generated_labels"].pop(real_idx)
+                            db["users"][current_user] = user_profile
+                            save_data(db)
+                            del st.session_state[f"confirm_prompt_{real_idx}"]
+                            st.success(f"Barcode returned to range registry.")
+                            st.rerun()
+                            
+                    with choice_cols[1]:
+                        if st.button("No (Burn Barcode)", key=f"re_no_{real_idx}"):
+                            user_profile["generated_labels"].pop(real_idx)
+                            db["users"][current_user] = user_profile
+                            save_data(db)
+                            del st.session_state[f"confirm_prompt_{real_idx}"]
+                            st.warning(f"Barcode burned permanently from inventory.")
+                            st.rerun()
+                            
+                    with choice_cols[2]:
+                        if st.button("Cancel Operations", key=f"re_can_{real_idx}"):
+                            del st.session_state[f"confirm_prompt_{real_idx}"]
+                            st.rerun()
+                st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
+
+# --- TAB 4: ADMIN PANEL ---
+if current_user.lower() == "admin":
+    with tabs[3]:
+        with st.container(border=True):
+            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>👥 Corporate Client Infrastructure Directory</h4>", unsafe_allow_html=True)
+            st.write("Real-time profile registry database controls for node security mapping management.")
+            st.write("---")
+            
+            admin_db = load_data()
+            users_map = admin_db.get("users", {})
+            
+            for uid, info in list(users_map.items()):
+                if uid.lower() == "admin": 
+                    continue
+                    
+                u_status = info.get("status", "active")
+                
+                adm_row = st.columns([0.34, 0.22, 0.22, 0.22])
+                with adm_row[0]:
+                    st.markdown(f"**User ID:** `{uid}` | **Name:** {info.get('name','N/A')}")
+                    st.caption(f"📧 {info.get('email','N/A')} | State: `{u_status.upper()}`")
+                    
+                with adm_row[1]:
+                    if st.button("🔑 Reset Password", key=f"adm_pwd_{uid}", use_container_width=True):
+                        admin_db["users"][uid]["password"] = "123456"
+                        save_data(admin_db)
+                        st.success("Reset to '123456'")
+                        time.sleep(0.4)
+                        st.rerun()
+                        
+                with adm_row[2]:
+                    if u_status == "active":
+                        if st.button("🔒 Lock User", key=f"adm_lock_{uid}", use_container_width=True):
+                            admin_db["users"][uid]["status"] = "locked"
+                            save_data(admin_db)
+                            st.warning("Locked Account")
+                            time.sleep(0.4)
+                            st.rerun()
+                    else:
+                        if st.button("🔓 Unlock User", key=f"adm_unl_{uid}", use_container_width=True):
+                            admin_db["users"][uid]["status"] = "active"
+                            save_data(admin_db)
+                            st.success("Unlocked Account")
+                            time.sleep(0.4)
+                            st.rerun()
+                            
+                with adm_row[3]:
+                    if st.button("🚨 Delete User", key=f"adm_del_{uid}", use_container_width=True):
+                        del admin_db["users"][uid]
+                        save_data(admin_db)
+                        st.error("Profile Deleted")
+                        time.sleep(0.4)
+                        st.rerun()
+                        
+                st.markdown("<h4 style='margin:12px 0; border-color:rgba(0,0,0,0.06);'></h4>", unsafe_allow_html=True)
