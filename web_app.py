@@ -7,6 +7,7 @@ import time
 import io
 import base64
 import re
+import requests
 import pandas as pd
 from barcode import Code128
 from barcode.writer import ImageWriter
@@ -34,10 +35,12 @@ BARCODE_POOL_KEYS = [
 def load_data():
     if not os.path.exists(DATA_FILE): return {"users": {}, "messages": []}
     with open(DATA_FILE, "r") as f: 
-        data = json.load(f)
-        if "messages" not in data:
-            data["messages"] = []
-        return data
+        try:
+            data = json.load(f)
+            if "messages" not in data: data["messages"] = []
+            return data
+        except Exception:
+            return {"users": {}, "messages": []}
 
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f)
@@ -86,10 +89,11 @@ def extract_pincode_and_mobile(text):
     for chunk in chunks:
         digits_only = chunk.replace('+', '')
         if len(digits_only) == 6: pincode = digits_only
-        elif len(digits_only) in [10, 11, 12, 13]: mobile = digits_only[-10:]
+        elif len(digits_only) == 10: mobile = digits_only
+        elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF PINCODE CSV LOADER ---
+# --- BULLETPROOF HYBRID PINCODE FETCHER ---
 @st.cache_data(show_spinner=False)
 def load_pincode_database_records():
     csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
@@ -97,13 +101,10 @@ def load_pincode_database_records():
     try:
         df = pd.read_csv(csv_path, dtype=str)
         df.columns = [str(c).lower().strip() for c in df.columns]
-        
         if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns:
             return {}
-            
         df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df = df[df['pincode'] != ""] 
-        
         df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
         return df_unique.set_index('pincode').to_dict(orient='index')
     except Exception:
@@ -125,7 +126,6 @@ def split_address_to_lines(address_text):
     l1 = lines[1] if len(lines) > 1 else ""
     l2 = lines[2] if len(lines) > 2 else ""
     l3 = ", ".join(lines[3:]) if len(lines) > 3 else ""
-    
     if not l1 and address_text:
         flat = str(address_text).replace('\n', ', ')
         name = flat[:40]
@@ -139,7 +139,6 @@ def draw_single_label(entry, width_in, height_in):
     DPI = 300
     W_px = int(width_in * DPI)
     H_px = int(height_in * DPI)
-    
     if not entry or not isinstance(entry, dict):
         return Image.new('RGB', (W_px, H_px), color='white')
         
@@ -284,47 +283,26 @@ else:
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
+if 'stage_msg' not in st.session_state: st.session_state.stage_msg = None
 
-# --- ALL WIDGET KEYS PRE-INITIALIZED ---
+# Core UI Bound Keys - These exist before UI renders
 keys_to_init = [
-    "s_addr_val", "r_addr_val", "s_mob_val", "r_mob_val", "r_pin_val", 
-    "load_profile_dd", "form_weight", "form_length", "form_breadth", 
-    "form_height", "form_cod", "form_cust_id", "stage_msg"
+    "s_addr_key", "r_addr_key", "form_w", "form_l", "form_b", 
+    "form_h", "form_cod", "form_cust", "load_profile_dd"
 ]
-for k in keys_to_init:
-    if k not in st.session_state:
-        st.session_state[k] = "" if k != "load_profile_dd" else "-- Select Profile --"
-        if k == "stage_msg": st.session_state[k] = None
+for key in keys_to_init:
+    if key not in st.session_state:
+        st.session_state[key] = "" if key != "load_profile_dd" else "-- Select Profile --"
 
 # Load Master Pincode Dictionary into Memory Cache
 pincode_lookup_db = load_pincode_database_records()
 
-# --- ACTION CALLBACKS FOR AUTO FILL ---
-def load_profile_action():
-    choice = st.session_state.load_profile_dd
-    if choice != "-- Select Profile --":
-        st.session_state.s_addr_val = choice
-        _, mob = extract_pincode_and_mobile(choice)
-        if mob: st.session_state.s_mob_val = mob
-
-def parse_sender_action():
-    txt = st.session_state.s_addr_val
-    _, mob = extract_pincode_and_mobile(txt)
-    if mob: st.session_state.s_mob_val = mob
-
-def parse_recipient_action():
-    txt = st.session_state.r_addr_val
-    pin, mob = extract_pincode_and_mobile(txt)
-    if pin: st.session_state.r_pin_val = pin
-    if mob: st.session_state.r_mob_val = mob
-
-# --- THE GOLD STANDARD: ON_CLICK STAGING CALLBACK ---
-# This callback executes BEFORE the screen redraws, preventing the StreamlitAPIException entirely.
-def stage_parcel_callback(tracking_id, article_class, pool_key, current_serial):
+# --- THE GOLD STANDARD: BACKGROUND STAGING CALLBACK ---
+# Executes completely behind the scenes before UI renders. No API Exceptions ever again.
+def stage_parcel_callback(tracking_id, article_class, pool_key, current_serial, final_r_pin, final_r_mob, final_s_mob):
     st.session_state.stage_msg = None
-    
-    db_from = st.session_state.s_addr_val.strip()
-    db_to = st.session_state.r_addr_val.strip()
+    db_from = st.session_state.s_addr_key.strip()
+    db_to = st.session_state.r_addr_key.strip()
     
     if not db_from or not db_to or not tracking_id:
         st.session_state.stage_msg = ("error", "From Address, To Address, and Tracking ID are mandatory.")
@@ -336,14 +314,14 @@ def stage_parcel_callback(tracking_id, article_class, pool_key, current_serial):
         "to": db_to, 
         "article": article_class,
         "cod": st.session_state.form_cod, 
-        "cust_id": st.session_state.form_cust_id, 
-        "weight": st.session_state.form_weight, 
-        "length": st.session_state.form_length, 
-        "breadth": st.session_state.form_breadth, 
-        "height": st.session_state.form_height, 
-        "s_mob": st.session_state.s_mob_val, 
-        "r_mob": st.session_state.r_mob_val, 
-        "pincode": st.session_state.r_pin_val
+        "cust_id": st.session_state.form_cust, 
+        "weight": st.session_state.form_w, 
+        "length": st.session_state.form_l, 
+        "breadth": st.session_state.form_b, 
+        "height": st.session_state.form_h, 
+        "s_mob": final_s_mob, 
+        "r_mob": final_r_mob, 
+        "pincode": final_r_pin
     })
     
     # Save Barcode Increment to DB
@@ -353,18 +331,21 @@ def stage_parcel_callback(tracking_id, article_class, pool_key, current_serial):
     db["users"][current_u]["barcodes"][pool_key]["current"] = current_serial + 1
     save_data(db)
     
-    # SAFELY CLEAR RECIPIENT FIELDS IN MEMORY BEFORE REDRAW
-    st.session_state.r_addr_val = ""
-    st.session_state.r_mob_val = ""
-    st.session_state.r_pin_val = ""
-    st.session_state.form_weight = ""
-    st.session_state.form_length = ""
-    st.session_state.form_breadth = ""
-    st.session_state.form_height = ""
+    # SECURELY WIPE RECIPIENT FIELDS IN THE BACKGROUND
+    st.session_state.r_addr_key = ""
+    st.session_state.form_w = ""
+    st.session_state.form_l = ""
+    st.session_state.form_b = ""
+    st.session_state.form_h = ""
     st.session_state.form_cod = ""
-    st.session_state.form_cust_id = ""
+    st.session_state.form_cust = ""
     
     st.session_state.stage_msg = ("success", "Staged successfully! Ready for the next recipient.")
+
+def load_profile_action():
+    choice = st.session_state.load_profile_dd
+    if choice != "-- Select Profile --":
+        st.session_state.s_addr_key = choice
 
 # --- AUTHENTICATION ---
 if not st.session_state.authenticated:
@@ -491,12 +472,13 @@ with tabs[0]:
             saved_addresses = user_profile.get("addresses", [])
             st.selectbox("Quick-Load Saved 'From' Address", ["-- Select Profile --"] + saved_addresses, key="load_profile_dd", on_change=load_profile_action)
             
-            st.text_area("Sender 'From' Address Details", key="s_addr_val", on_change=parse_sender_action)
+            # CORE ADDRESS BLOCKS
+            s_addr = st.text_area("Sender 'From' Address Details", key="s_addr_key")
             
             col_addr_actions = st.columns(2)
             with col_addr_actions[0]:
                 if st.button("💾 Remember Address", use_container_width=True):
-                    val = st.session_state.s_addr_val.strip()
+                    val = st.session_state.s_addr_key.strip()
                     if val and val not in user_profile["addresses"]:
                         db["users"][current_user]["addresses"].append(val)
                         save_data(db)
@@ -512,27 +494,30 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            # Safe Native Callbacks via on_change
-            st.text_area("Recipient 'To' Address Details", key="r_addr_val", on_change=parse_recipient_action)
+            r_addr = st.text_area("Recipient 'To' Address Details", key="r_addr_key")
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES)
             
-            if "COD" in article_type: 
-                st.text_input("Collect on Delivery (COD) Amount (₹)", key="form_cod")
-            st.text_input("India Post Customer Business ID", key="form_cust_id")
+            if "COD" in article_type: st.text_input("Collect on Delivery (COD) Amount (₹)", key="form_cod")
+            st.text_input("India Post Customer Business ID", key="form_cust")
             
             st.write("**Volumetric Specifications (Optional)**")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: st.text_input("Weight (g)", key="form_weight")
-            with col_m2: st.text_input("Len (cm)", key="form_length")
-            with col_m3: st.text_input("Wid (cm)", key="form_breadth")
-            with col_m4: st.text_input("Hgt (cm)", key="form_height")
+            with col_m1: st.text_input("Weight (g)", key="form_w")
+            with col_m2: st.text_input("Len (cm)", key="form_l")
+            with col_m3: st.text_input("Wid (cm)", key="form_b")
+            with col_m4: st.text_input("Hgt (cm)", key="form_h")
                 
+            # AUTO EXTRACT ENGINE
+            _, s_mob_auto = extract_pincode_and_mobile(s_addr)
+            r_pin_auto, r_mob_auto = extract_pincode_and_mobile(r_addr)
+            
+            # DEPENDENT WIDGETS (NO KEYS! Driven pure top-down via value argument to prevent API Exceptions)
             col_mob1, col_mob2 = st.columns(2)
-            with col_mob1: st.text_input("Sender Mobile (Optional)", key="s_mob_val")
-            with col_mob2: st.text_input("Receiver Mobile (Optional)", key="r_mob_val")
+            with col_mob1: s_mob_final = st.text_input("Sender Mobile (Optional)", value=s_mob_auto)
+            with col_mob2: r_mob_final = st.text_input("Receiver Mobile (Optional)", value=r_mob_auto)
                 
             col_pin1, col_pin2 = st.columns(2)
-            with col_pin1: st.text_input("Extracted Pincode (Optional)", key="r_pin_val")
+            with col_pin1: r_pin_final = st.text_input("Extracted Pincode (Optional)", value=r_pin_auto)
             with col_pin2: st.write("")
 
             shared_pool_key = get_pool_key(article_type)
@@ -557,15 +542,19 @@ with tabs[0]:
                 if auto_tracking: st.info(f"Next S10 Tracking ID: **{auto_tracking}**")
                 else: st.error("❌ Barcode Pool Depleted! Update configuration strings.")
 
-            # SUCCESS/ERROR ALERTS RENDERED ABOVE THE BUTTON
             if st.session_state.stage_msg:
                 m_type, text = st.session_state.stage_msg
                 if m_type == "error": st.error(text)
                 else: st.success(text)
                 st.session_state.stage_msg = None
 
-            # THE FIX: Pushing the Stage function to an explicit on_click callback
-            st.button("➕ Stage to Batch Allocation Queue", type="primary", on_click=stage_parcel_callback, args=(auto_tracking, article_type, shared_pool_key, current_serial_8))
+            # THE BUTTON: Executes the Callback to safely bypass API Exception rules
+            st.button(
+                "➕ Stage to Batch Allocation Queue", 
+                type="primary", 
+                on_click=stage_parcel_callback, 
+                args=(auto_tracking, article_type, shared_pool_key, current_serial_8, r_pin_final, r_mob_final, s_mob_final)
+            )
 
     with col_preview:
         with st.container(border=True):
@@ -587,7 +576,7 @@ with tabs[0]:
                     if not os.path.exists(template_filename):
                         st.error("CRITICAL: Master template tracking sheet asset missing from directory.")
                     else:
-                        with st.spinner("Executing secure local database compilation..."):
+                        with st.spinner("Compiling manifest locally against database..."):
                             pdf_pages = []
                             wb = openpyxl.load_workbook(template_filename)
                             ws = wb.active
