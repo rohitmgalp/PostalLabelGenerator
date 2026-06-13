@@ -163,16 +163,24 @@ def split_address_to_lines(address_text):
         l3 = flat[140:190]
     return name, l1, l2, l3
 
-# --- GENERATE SINGLE LABEL CANVAS HELPER ---
+# --- GENERATE SINGLE LABEL CANVAS HELPER (BULLETPROOFED) ---
 def draw_single_label(entry, width_in, height_in):
     DPI = 300
     W_px = int(width_in * DPI)
     H_px = int(height_in * DPI)
+    
+    # Return blank canvas if entry is completely broken/None to prevent compiler crash
+    if not entry or not isinstance(entry, dict):
+        return Image.new('RGB', (W_px, H_px), color='white')
+        
     m_px = int(W_px * 0.05)
+    
+    tracking_code = str(entry.get('tracking', '0000000000000'))
+    article_type = str(entry.get('article', 'ARTICLE'))
     
     Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
-    my_barcode = Code128(entry['tracking'], writer=ImageWriter())
+    my_barcode = Code128(tracking_code, writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
     bc_buffer.seek(0)
     bc_img = Image.open(bc_buffer)
@@ -194,9 +202,9 @@ def draw_single_label(entry, width_in, height_in):
     except:
         f_l = f_m = f_b = f_bc = ImageFont.load_default()
         
-    top_strings = [f"ARTICLE: {entry['article']}"]
-    if entry.get('cust_id'): top_strings.append(f"CUST ID: {entry['cust_id']}")
-    if entry.get('cod'): top_strings.append(f"COD CHARGES: Rs. {entry['cod']}")
+    top_strings = [f"ARTICLE: {article_type}"]
+    if entry.get('cust_id'): top_strings.append(f"CUST ID: {entry.get('cust_id')}")
+    if entry.get('cod'): top_strings.append(f"COD CHARGES: Rs. {entry.get('cod')}")
     
     if W_px >= H_px:
         bc_h_scaled = int(H_px * 0.13)
@@ -211,14 +219,14 @@ def draw_single_label(entry, width_in, height_in):
         y_left += int(H_px * 0.02)
         draw.text((m_px, y_left), "FROM:", fill="black", font=f_b)
         y_left += int(size_b * 1.2)
-        w_from = wrap_text_to_pixels(entry['from'], draw, f_m, col_width)
+        w_from = wrap_text_to_pixels(entry.get('from', ''), draw, f_m, col_width)
         draw.multiline_text((m_px, y_left), w_from, fill="black", font=f_m, spacing=8)
         
         x_right = m_px + col_width + m_px
         y_right = m_px
         draw.text((x_right, y_right), "TO:", fill="black", font=f_b)
         y_right += int(size_b * 1.2)
-        w_to = wrap_text_to_pixels(entry['to'], draw, f_l, col_width)
+        w_to = wrap_text_to_pixels(entry.get('to', ''), draw, f_l, col_width)
         draw.multiline_text((x_right, y_right), w_to, fill="black", font=f_l, spacing=8)
         
         bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
@@ -236,20 +244,20 @@ def draw_single_label(entry, width_in, height_in):
         y_curr += int(H_px * 0.02)
         draw.text((m_px, y_curr), "FROM:", fill="black", font=f_b)
         y_curr += int(size_b * 1.2)
-        w_from = wrap_text_to_pixels(entry['from'], draw, f_m, use_w)
+        w_from = wrap_text_to_pixels(entry.get('from', ''), draw, f_m, use_w)
         draw.multiline_text((m_px, y_curr), w_from, fill="black", font=f_m, spacing=8)
         b_box = draw.multiline_textbbox((m_px, y_curr), w_from, font=f_m, spacing=8)
         y_cursor_from = b_box[3] + int(H_px * 0.04)
         draw.text((m_px, y_cursor_from), "TO:", fill="black", font=f_b)
         y_cursor_from += int(size_b * 1.2)
-        w_to = wrap_text_to_pixels(entry['to'], draw, f_l, use_w)
+        w_to = wrap_text_to_pixels(entry.get('to', ''), draw, f_l, use_w)
         draw.multiline_text((m_px, y_cursor_from), w_to, fill="black", font=f_l, spacing=8)
         bc_resized = bc_img.resize((bc_w_scaled, bc_h_scaled))
         lbl_canvas.paste(bc_resized, ((W_px - bc_w_scaled) // 2, bc_y_pos))
         
-    bbox_bc = draw.textbbox((0, 0), entry['tracking'], font=f_bc)
+    bbox_bc = draw.textbbox((0, 0), tracking_code, font=f_bc)
     text_bc_w = bbox_bc[2] - bbox_bc[0]
-    draw.text(((W_px - text_bc_w) // 2, bc_y_pos + bc_h_scaled + int(H_px * 0.012)), entry['tracking'], fill="black", font=f_bc)
+    draw.text(((W_px - text_bc_w) // 2, bc_y_pos + bc_h_scaled + int(H_px * 0.012)), tracking_code, fill="black", font=f_bc)
     return lbl_canvas
 
 def get_base64_image(image_path):
@@ -505,7 +513,7 @@ with tabs[0]:
             shared_pool_key = get_pool_key(article_type)
             b_current = user_profile["barcodes"][shared_pool_key]
             used_set = set(user_profile.get("used_barcodes", []))
-            queue_set = {item["tracking"] for item in st.session_state.web_queue}
+            queue_set = {item.get("tracking") for item in st.session_state.web_queue if isinstance(item, dict)}
 
             if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
                 st.error(f"❌ Shared series empty! Configure ranges for: {shared_pool_key}")
@@ -550,7 +558,7 @@ with tabs[0]:
         with st.container(border=True):
             st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⏳ Staged Processing Queue</h4>", unsafe_allow_html=True)
             if st.session_state.web_queue:
-                display_df = pd.DataFrame(st.session_state.web_queue)[["tracking", "article", "weight", "cust_id"]]
+                display_df = pd.DataFrame([item for item in st.session_state.web_queue if isinstance(item, dict)])[["tracking", "article", "weight", "cust_id"]]
                 st.dataframe(display_df, use_container_width=True)
                 if st.button("🗑️ Wipe Entire Active Session Queue"):
                     st.session_state.web_queue = []
@@ -573,8 +581,13 @@ with tabs[0]:
                             next_row = ws.max_row + 1
                             
                             for idx, entry in enumerate(st.session_state.web_queue):
+                                # Bulletproof filter to drop missing/corrupt items from breaking the loop
+                                if not isinstance(entry, dict):
+                                    continue
+                                    
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
-                                pdf_pages.append(lbl_canvas)
+                                if lbl_canvas:
+                                    pdf_pages.append(lbl_canvas)
                                 
                                 # SAFE LIVE API FETCHING
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
@@ -631,9 +644,10 @@ with tabs[0]:
                             db["users"][current_user] = user_profile
                             save_data(db)
                             
-                            pdf_buffer = io.BytesIO()
-                            pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
-                            st.session_state.pdf_ready = pdf_buffer.getvalue()
+                            if pdf_pages:
+                                pdf_buffer = io.BytesIO()
+                                pdf_pages[0].save(pdf_buffer, "PDF", save_all=True, append_images=pdf_pages[1:], resolution=300.0)
+                                st.session_state.pdf_ready = pdf_buffer.getvalue()
                             
                             excel_buffer = io.BytesIO()
                             wb.save(excel_buffer)
@@ -694,9 +708,10 @@ with tabs[2]:
                     st.caption(f"**Recipient:** {item['to'].splitlines()[0][:35]}...")
                 with row_cols[1]:
                     lbl_canvas = draw_single_label(item, 6.0, 4.0)
-                    reprint_buf = io.BytesIO()
-                    lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
-                    st.download_button("🖨️ Reprint PDF", data=reprint_buf.getvalue(), file_name=f"Reprint_{item['tracking']}.pdf", mime="application/pdf", key=f"rep_{item['tracking']}_{real_idx}")
+                    if lbl_canvas:
+                        reprint_buf = io.BytesIO()
+                        lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
+                        st.download_button("🖨️ Reprint PDF", data=reprint_buf.getvalue(), file_name=f"Reprint_{item['tracking']}.pdf", mime="application/pdf", key=f"rep_{item['tracking']}_{real_idx}")
                 with row_cols[2]:
                     if st.button(f"🗑️ Delete Record", key=f"del_init_{real_idx}"): st.session_state[f"confirm_prompt_{real_idx}"] = True
                 
@@ -736,7 +751,6 @@ if current_user.lower() == "admin":
                 adm_row = st.columns([0.34, 0.22, 0.22, 0.22])
                 with adm_row[0]:
                     st.markdown(f"**User ID:** `{uid}` | **Name:** {info.get('name','N/A')}")
-                    # --- FIX: Email and Mobile added permanently to Directory View ---
                     st.caption(f"📧 **Email:** {info.get('email', 'N/A')} | 📱 **Mobile:** {info.get('mobile', 'N/A')}")
                     st.caption(f"🟢 State: `{u_status.upper()}`")
                 with adm_row[1]:
@@ -787,14 +801,33 @@ if current_user.lower() == "admin":
                     st.error("Message cannot be blank.")
                     
             st.markdown("---")
-            st.markdown("### 📥 User Replies & History")
+            
+            col_msg_head1, col_msg_head2 = st.columns([0.75, 0.25])
+            with col_msg_head1:
+                st.markdown("### 📥 User Replies & History")
+            with col_msg_head2:
+                # ADMIN DELETE ALL MESSAGES BUTTON
+                if st.button("🗑️ Clear All History", type="primary"):
+                    db["messages"] = []
+                    save_data(db)
+                    st.rerun()
+                    
             messages_list = db.get("messages", [])
             if not messages_list:
                 st.info("No messages sent yet.")
             else:
-                for m in reversed(messages_list):
+                for i, m in enumerate(reversed(messages_list)):
+                    real_idx = len(messages_list) - 1 - i
                     with st.container(border=True):
-                        st.markdown(f"**To User Node:** `{m['to']}` | **Status:** `{m['status'].upper()}`")
-                        st.info(f"**Admin Sent:** {m['text']}")
-                        if m["reply"]:
-                            st.success(f"**Reply Received:** {m['reply']}")
+                        col_m1, col_m2 = st.columns([0.85, 0.15])
+                        with col_m1:
+                            st.markdown(f"**To User Node:** `{m['to']}` | **Status:** `{m['status'].upper()}`")
+                            st.info(f"**Admin Sent:** {m['text']}")
+                            if m["reply"]:
+                                st.success(f"**Reply Received:** {m['reply']}")
+                        with col_m2:
+                            # ADMIN INDIVIDUAL DELETE BUTTON
+                            if st.button("❌ Delete", key=f"del_msg_ind_{real_idx}"):
+                                db["messages"].pop(real_idx)
+                                save_data(db)
+                                st.rerun()
