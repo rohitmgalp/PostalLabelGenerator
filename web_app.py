@@ -77,6 +77,34 @@ def wrap_text_to_pixels(text, draw, font, max_width):
         if current_line: lines.append(current_line)
     return '\n'.join(lines)
 
+# --- INTELLIGENT RECIPIENT DATA EXTRACTION ENGINE ---
+def extract_pincode_and_mobile(text):
+    pincode = ""
+    mobile = ""
+    if not text:
+        return pincode, mobile
+    
+    # Normalize address string segments by breaking out common punctuation marks
+    clean_delimiters = text.replace('-', ' ').replace(':', ' ').replace(',', ' ').replace('.', ' ')
+    words = clean_delimiters.split()
+    
+    for w in words:
+        # Strip string artifacts while leaving digits and absolute phone prefix symbols
+        clean_w = ''.join([c for c in w if c.isdigit() or c == '+'])
+        digits_only = clean_w.replace('+', '')
+        
+        # 1. Capture 6-Digit Standalone Postal Codes
+        if len(digits_only) == 6:
+            pincode = digits_only
+        # 2. Capture 10-Digit Standard Mobile Numbers
+        elif len(digits_only) == 10:
+            mobile = digits_only
+        # 3. Capture Extended Country-Coded Routing Configurations (Isolate Last 10 Digits)
+        elif len(digits_only) in [11, 12, 13]:
+            mobile = digits_only[-10:]
+            
+    return pincode, mobile
+
 # --- PREMIUM BASE64 IMAGE ENCODER ---
 def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
@@ -203,29 +231,13 @@ if os.path.exists(bg_file_path):
             div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
             div.stButton > button[type="primary"]:hover {{ background-color: #bd0000 !important; }}
             
-            /* Clean floating contact link anchored layout safely to the right bottom aspect */
             .whatsapp-float {{
-                position: fixed;
-                bottom: 24px;
-                right: 24px;
-                background-color: #25d366;
-                color: white !important;
-                padding: 12px 22px;
-                border-radius: 30px;
-                text-decoration: none !important;
-                font-family: 'Segoe UI', system-ui, sans-serif;
-                font-weight: 700;
-                font-size: 14px;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.22);
-                z-index: 99999;
-                display: inline-flex;
-                align-items: center;
-                transition: transform 0.2s ease, background-color 0.2s ease;
+                position: fixed; bottom: 24px; right: 24px; background-color: #25d366; color: white !important;
+                padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: 'Segoe UI', sans-serif;
+                font-weight: 700; font-size: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.22); z-index: 99999;
+                display: inline-flex; align-items: center; transition: transform 0.2s ease, background-color 0.2s ease;
             }}
-            .whatsapp-float:hover {{
-                background-color: #1ebd58;
-                transform: scale(1.05);
-            }}
+            .whatsapp-float:hover {{ background-color: #1ebd58; transform: scale(1.05); }}
         </style>
         {whatsapp_html}
     """, unsafe_allow_html=True)
@@ -382,6 +394,10 @@ with tabs[0]:
                         st.rerun()
                     
             to_address = st.text_area("Recipient 'To' Address Details", key=f"recipient_to_input_{st.session_state.clear_counter}")
+            
+            # Executing Text Intelligence Mining Rules on Recipient Address Area
+            ext_pincode, ext_mobile = extract_pincode_and_mobile(to_address)
+            
             article_type = st.selectbox("Postal Article Class", DISPATCH_ARTICLES, key="disp_art")
             
             cod_amount = ""
@@ -396,8 +412,19 @@ with tabs[0]:
             with col_m4: height_metric = st.text_input("Hgt (cm)")
                 
             col_mob1, col_mob2 = st.columns(2)
-            with col_mob1: s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
-            with col_mob2: r_mob = st.text_input("Receiver Mobile (Optional)")
+            with col_mob1: 
+                s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
+            with col_mob2: 
+                # Auto-inject extracted mobile number into widget value configuration mapping
+                r_mob = st.text_input("Receiver Mobile (Optional)", value=ext_mobile, key=f"receiver_mobile_{st.session_state.clear_counter}")
+                
+            # --- CUSTOM ROW EXTRACTION MODULE BLOCK ---
+            col_pin1, col_pin2 = st.columns(2)
+            with col_pin1:
+                # Auto-inject extracted 6-digit Pincode cleanly below the Sender Mobile vertical column stack aspect
+                pin_code = st.text_input("Extracted Pincode (Optional)", value=ext_pincode, key=f"recipient_pincode_{st.session_state.clear_counter}")
+            with col_pin2:
+                st.write("")
 
             shared_pool_key = get_pool_key(article_type)
             b_current = user_profile["barcodes"][shared_pool_key]
@@ -433,12 +460,14 @@ with tabs[0]:
                         "cod": cod_amount, "cust_id": customer_id, 
                         "weight": weight if weight else "", "length": length if length else "", 
                         "breadth": breadth if breadth else "", "height": height_metric if height_metric else "", 
-                        "s_mob": s_mob if s_mob else "", "r_mob": r_mob if r_mob else ""
+                        "s_mob": s_mob if s_mob else "", "r_mob": r_mob if r_mob else "",
+                        "pincode": pin_code if pin_code else ""
                     })
                     db["users"][current_user]["used_barcodes"].append(auto_tracking)
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
+                    # Force counter state shifts. Automatically clears text-area, r_mob, and pincode elements together
                     st.session_state.clear_counter += 1
                     st.success("Staged successfully into batch pipelines!")
                     st.rerun()
