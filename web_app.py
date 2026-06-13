@@ -84,30 +84,52 @@ def extract_pincode_and_mobile(text):
     mobile = ""
     if not text:
         return pincode, mobile
-    
-    # Isolate any numeric word clusters using regex boundaries
     chunks = re.findall(r'\+?\d+', text)
-    
     for chunk in chunks:
-        # Strip string prefixes to evaluate pure digits
         digits_only = chunk.replace('+', '')
-        
-        # Isolate standalone 6-digit postal pincodes
         if len(digits_only) == 6:
             pincode = digits_only
-        # Isolate standalone 10-digit primary routing numbers
         elif len(digits_only) == 10:
             mobile = digits_only
-        # Isolate country-coded strings (slice and harvest last 10 characters)
         elif len(digits_only) in [11, 12, 13]:
             mobile = digits_only[-10:]
-            
     return pincode, mobile
 
-# --- PREMIUM BASE64 IMAGE ENCODER ---
-def get_base64_image(image_path):
-    with open(image_path, "rb") as img_file:
-        return base64.b64encode(img_file.read()).decode()
+# --- CACHED ALL-INDIA PINCODE CROSS-REFERENCE LOOKUP ENGINE ---
+@st.cache_data
+def lookup_pincode_details(pin_str):
+    csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
+    if not os.path.exists(csv_path):
+        return {"district": "", "statename": ""}
+    try:
+        df = pd.read_csv(csv_path, dtype={'pincode': str})
+        df.columns = [c.lower().strip() for c in df.columns]
+        match = df[df['pincode'] == str(pin_str).strip()]
+        if not match.empty:
+            row = match.iloc[0]
+            return {
+                "district": str(row.get("district", "")).upper(),
+                "statename": str(row.get("statename", "")).upper()
+            }
+    except:
+        pass
+    return {"district": "", "statename": ""}
+
+# --- CHUNKED ADDRESS FIELD COMPLIANCE ENGINE ---
+def split_address_to_lines(address_text):
+    lines = [line.strip() for line in str(address_text).split('\n') if line.strip()]
+    name = lines[0] if len(lines) > 0 else "CUSTOMER"
+    l1 = lines[1] if len(lines) > 1 else ""
+    l2 = lines[2] if len(lines) > 2 else ""
+    l3 = ", ".join(lines[3:]) if len(lines) > 3 else ""
+    
+    if not l1 and address_text:
+        flat = str(address_text).replace('\n', ', ')
+        name = flat[:40]
+        l1 = flat[40:90]
+        l2 = flat[90:140]
+        l3 = flat[140:190]
+    return name, l1, l2, l3
 
 # --- GENERATE SINGLE LABEL CANVAS HELPER ---
 def draw_single_label(entry, width_in, height_in):
@@ -208,14 +230,19 @@ def draw_single_label(entry, width_in, height_in):
         
     return lbl_canvas
 
-# --- THEME & FLOATING WHATSAPP BUTTON STYLING INJECTION ---
+# --- PREMIUM BASE64 IMAGE ENCODER ---
+def get_base64_image(image_path):
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
+
+# --- STYLING & FLOATING WHATSAPP BUTTON ---
 st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
 bg_file_path = os.path.join(BASE_DIR, "background.png")
 
 whatsapp_html = """
     <a href="https://wa.me/918075386388" target="_blank" class="whatsapp-float">
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="margin-right: 8px; display: inline-block; vertical-align: middle;">
-            <path d="M13.601 2.326A7.85 7.85 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.9 7.9 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.9 7.9 0 0 0 13.6 2.326zM7.994 14.521a6.6 6.6 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c1.11-4.285 4.564-6.574 8.718-6.574a6.58 6.58 0 0 1 4.66 2.72 6.58 6.58 0 0 1 1.936 4.663c-.004 4.2-3.563 7.759-7.923 7.759M11.57 9.447c-.19-.094-1.127-.556-1.301-.62-.174-.064-.3-.094-.426.094-.126.188-.488.62-.6.749-.113.128-.226.144-.417.05-.19-.095-.807-.296-1.536-.855-.567-.457-.951-1.022-1.062-1.116-.112-.094-.012-.145.083-.242.085-.087.174-.188.26-.283.085-.087.174-.188.26-.283.087-.095.116-.16.174-.319.059-.158.03-.3-.015-.394-.045-.094-.426-1.026-.583-1.409-.153-.367-.307-.317-.418-.317-.109-.004-.234-.004-.36-.004a.69.69 0 0 0-.5.234c-.174.188-.665.65-0.665 1.583s.678 1.834.773 1.96c.095.127 1.332 2.035 3.226 2.856.45.195.8.311 1.075.398.452.144.863.124 1.189.062.363-.069 1.127-.461 1.284-.906.158-.444.158-.825.11-1.013-.048-.19-.174-.3-.365-.394"/>
+            <path d="M13.601 2.326A7.85 7.85 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.9 7.9 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.9 7.9 0 0 0 13.6 2.326zM7.994 14.521a6.6 6.6 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c1.11-4.285 4.564-6.574 8.718-6.574a6.58 6.58 0 0 1 4.66 2.72 6.58 6.58 0 0 1 1.936 4.663c-.004 4.2-3.563 7.759-7.923 7.759M11.57 9.447c-.19-.094-1.127-.556-1.301-.62-.174-.064-.3-.094-.426.094-.126.188-.488.62-.6.749-.113.128-.226.144-.417.05-.19-.095-.807-.296-1.536-.855-.567-.457-.951-1.022-1.062-1.116-.112-.094-.012-.145.083-.242.085-.087.174-.188.26-.283.087-.095.116-.16.174-.319.059-.158.03-.3-.015-.394-.045-.094-.426-1.026-.583-1.409-.153-.367-.307-.317-.418-.317-.109-.004-.234-.004-.36-.004a.69.69 0 0 0-.5.234c-.174.188-.665.65-0.665 1.583s.678 1.834.773 1.96c.095.127 1.332 2.035 3.226 2.856.45.195.8.311 1.075.398.452.144.863.124 1.189.062.363-.069 1.127-.461 1.284-.906.158-.444.158-.825.11-1.013-.048-.19-.174-.3-.365-.394"/>
         </svg>Contact Us
     </a>
 """
@@ -229,7 +256,6 @@ if os.path.exists(bg_file_path):
             .stTextInput input, .stTextArea textarea, .stSelectbox div {{ border-color: #cbd5e1 !important; background-color: #ffffff !important; color: #0f172a !important; }}
             div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
             div.stButton > button[type="primary"]:hover {{ background-color: #bd0000 !important; }}
-            
             .whatsapp-float {{
                 position: fixed; bottom: 24px; right: 24px; background-color: #25d366; color: white !important;
                 padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: 'Segoe UI', sans-serif;
@@ -261,7 +287,6 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 
-# --- PERSISTENT SEAMLESS INPUT MEMORY HOLDERS ---
 if "addr_text" not in st.session_state: st.session_state.addr_text = ""
 if "addr_pin" not in st.session_state: st.session_state.addr_pin = ""
 if "addr_mob" not in st.session_state: st.session_state.addr_mob = ""
@@ -396,10 +421,8 @@ with tabs[0]:
                         st.warning("Address profile removed.")
                         st.rerun()
                     
-            # Raw Address input capturing field layout
             to_address = st.text_area("Recipient 'To' Address Details", value=st.session_state.addr_text)
             
-            # Real-Time Background Synchronization logic triggers when the text changes
             if to_address != st.session_state.addr_text:
                 st.session_state.addr_text = to_address
                 pin, mob = extract_pincode_and_mobile(to_address)
@@ -424,12 +447,10 @@ with tabs[0]:
             with col_mob1: 
                 s_mob = st.text_input("Sender Mobile (Optional)", value=user_profile.get('mobile', ''))
             with col_mob2: 
-                # Interactively bound directly to the extracted layout properties stream logic
                 r_mob = st.text_input("Receiver Mobile (Optional)", value=st.session_state.addr_mob)
                 
             col_pin1, col_pin2 = st.columns(2)
             with col_pin1:
-                # Interactively bound directly to the extracted layout properties stream logic
                 pin_code = st.text_input("Extracted Pincode (Optional)", value=st.session_state.addr_pin)
             with col_pin2:
                 st.write("")
@@ -475,7 +496,6 @@ with tabs[0]:
                     db["users"][current_user]["barcodes"][shared_pool_key]["current"] = b_current["current"] + 1
                     save_data(db)
                     
-                    # Zero out values completely on stage success execution
                     st.session_state.addr_text = ""
                     st.session_state.addr_pin = ""
                     st.session_state.addr_mob = ""
@@ -497,9 +517,12 @@ with tabs[0]:
                 
                 if st.button("⚙️ Compile Label PDFs & Sync Template Matrix", type="primary"):
                     pdf_pages = []
-                    template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
+                    template_filename = os.path.join(BASE_DIR, "New Format bulk.xlsx")
                     if not os.path.exists(template_filename):
-                        st.error(f"CRITICAL: Template file missing at: {template_filename}")
+                        template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
+                        
+                    if not os.path.exists(template_filename):
+                        st.error("CRITICAL: Master template tracking sheet asset missing from directory.")
                     else:
                         wb = openpyxl.load_workbook(template_filename)
                         ws = wb.active
@@ -509,31 +532,46 @@ with tabs[0]:
                             lbl_canvas = draw_single_label(entry, width_in, height_in)
                             pdf_pages.append(lbl_canvas)
                             
-                            # --- EXCEL DATA INJECTIONS ---
-                            ws.cell(row=next_row, column=1, value=idx + 1)
-                            ws.cell(row=next_row, column=2, value=entry['tracking'])
-                            ws.cell(row=next_row, column=3, value=entry['weight'])
-                            ws.cell(row=next_row, column=5, value=entry['length'])
-                            ws.cell(row=next_row, column=6, value=entry['breadth'])
-                            ws.cell(row=next_row, column=7, value=entry['height'])
+                            # --- AUTOMATED DATABASE LOOKUPS ---
+                            r_pin_details = lookup_pincode_details(entry.get('pincode', ''))
+                            r_name, r_l1, r_l2, r_l3 = split_address_to_lines(entry['to'])
                             
-                            c_from = entry['from'].replace('\n', ', ')
-                            ws.cell(row=next_row, column=11, value=user_profile.get('name', current_user))
-                            ws.cell(row=next_row, column=13, value=c_from[:50])
-                            ws.cell(row=next_row, column=14, value=c_from[50:100])
-                            ws.cell(row=next_row, column=37, value=entry['s_mob'])
+                            s_pin, _ = extract_pincode_and_mobile(entry['from'])
+                            s_pin_details = lookup_pincode_details(s_pin)
+                            _, s_l1, s_l2, s_l3 = split_address_to_lines(entry['from'])
                             
-                            c_to = entry['to'].replace('\n', ', ')
-                            ws.cell(row=next_row, column=22, value="CUSTOMER")
-                            ws.cell(row=next_row, column=24, value=c_to[:50])
-                            ws.cell(row=next_row, column=25, value=c_to[50:100])
-                            ws.cell(row=next_row, column=38, value=entry['r_mob'])
+                            # --- ENHANCED CORE MANIFEST INJECTIONS ---
+                            ws.cell(row=next_row, column=1, value=idx + 1)                      # SERIAL NUMBER
+                            ws.cell(row=next_row, column=2, value=entry['tracking'])            # BARCODE NO
+                            ws.cell(row=next_row, column=3, value=entry['weight'])              # PHYSICAL WEIGHT
+                            ws.cell(row=next_row, column=6, value=r_pin_details.get('district', '')) # RECEIVER CITY
+                            ws.cell(row=next_row, column=7, value=entry.get('pincode', ''))     # RECEIVER PINCODE
+                            ws.cell(row=next_row, column=8, value=r_name)                       # RECEIVER NAME
+                            ws.cell(row=next_row, column=9, value=r_l1)                         # RECEIVER ADD LINE 1
+                            ws.cell(row=next_row, column=10, value=r_l2)                        # RECEIVER ADD LINE 2
+                            ws.cell(row=next_row, column=11, value=r_l3)                        # RECEIVER ADD LINE 3
+                            ws.cell(row=next_row, column=13, value=entry['s_mob'])              # SENDER MOBILE NO
+                            ws.cell(row=next_row, column=14, value=entry['r_mob'])              # RECEIVER MOBILE NO
                             
-                            if entry['cod']:
-                                ws.cell(row=next_row, column=41, value="TRUE")
-                                ws.cell(row=next_row, column=42, value=entry['cod'])
+                            if "COD" in entry['article']:
+                                ws.cell(row=next_row, column=17, value="COD")                   # CODR/COD
+                                ws.cell(row=next_row, column=18, value=entry['cod'])            # VALUE FOR CODR/COD
+                                
+                            ws.cell(row=next_row, column=22, value=entry['length'])             # LENGTH
+                            ws.cell(row=next_row, column=23, value=entry['breadth'])            # BREADTH/DIAMETER
+                            ws.cell(row=next_row, column=24, value=entry['height'])             # HEIGHT
+                            
+                            ws.cell(row=next_row, column=29, value=user_profile.get('name', current_user)) # SENDER NAME
+                            ws.cell(row=next_row, column=31, value=s_pin_details.get('district', ''))      # SENDER CITY
+                            ws.cell(row=next_row, column=32, value=s_pin_details.get('statename', ''))     # SENDER STATE/UT
+                            ws.cell(row=next_row, column=33, value=s_pin)                                  # SENDER PINCODE
+                            ws.cell(row=next_row, column=39, value=r_pin_details.get('statename', ''))     # RECEIVER STATE/UT
+                            
+                            ws.cell(row=next_row, column=46, value=s_l1)                        # SENDER ADD LINE 1
+                            ws.cell(row=next_row, column=47, value=s_l2)                        # SENDER ADD LINE 2
+                            ws.cell(row=next_row, column=48, value=s_l3)                        # SENDER ADD LINE 3
+                            
                             next_row += 1
-                            
                             user_profile["generated_labels"].append(entry)
                             
                         db["users"][current_user] = user_profile
@@ -654,7 +692,7 @@ with tabs[2]:
                             st.rerun()
                 st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
 
-# --- TAB 4: REAL-TIME INTERACTIVE CONTROL GRID (ADMIN PANEL) ---
+# --- TAB 4: ADMIN PANEL ---
 if current_user.lower() == "admin":
     with tabs[3]:
         with st.container(border=True):
