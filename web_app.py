@@ -7,13 +7,10 @@ import time
 import io
 import base64
 import re
+import requests
 import pandas as pd
-
-# --- CRITICAL BARCODE IMPORT FIX ---
-# Do NOT import `barcode` directly. Import Code128 and ImageWriter directly to prevent AttributeError.
-from barcode.codex import Code128
+from barcode import Code128
 from barcode.writer import ImageWriter
-
 from PIL import Image, ImageDraw, ImageFont
 
 # --- SYSTEM DIRECTORY SETUP ---
@@ -35,9 +32,11 @@ BARCODE_POOL_KEYS = [
     "Business Parcel COD"
 ]
 
+# --- OMNIPRESENT DATABASE HEALER ---
 def load_data():
     default_db = {"users": {}, "messages": []}
-    if not os.path.exists(DATA_FILE): return default_db
+    if not os.path.exists(DATA_FILE): 
+        return default_db
     try:
         with open(DATA_FILE, "r") as f:
             content = f.read().strip()
@@ -45,6 +44,7 @@ def load_data():
             data = json.loads(content)
             if not isinstance(data, dict): return default_db
             
+            # This completely eliminates KeyErrors. It forces the structure to exist.
             if "users" not in data: data["users"] = {}
             if "messages" not in data: data["messages"] = []
             
@@ -56,6 +56,7 @@ def load_data():
                 for pk in BARCODE_POOL_KEYS:
                     if pk not in udata["barcodes"]:
                         udata["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
+            
             return data
     except Exception:
         return default_db
@@ -68,6 +69,7 @@ def get_pool_key(article_type):
         return "Speed Post Parcel (Regular & COD Shared Pool)"
     return article_type
 
+# --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
@@ -79,6 +81,7 @@ def calculate_upu_s10_check_digit(serial_8_digits):
     elif c == 11: return "5"
     else: return str(c)
 
+# --- TEXT WRAPPING ENGINE ---
 def wrap_text_to_pixels(text, draw, font, max_width):
     text_str = str(text)
     lines = []
@@ -97,6 +100,7 @@ def wrap_text_to_pixels(text, draw, font, max_width):
         if current_line: lines.append(current_line)
     return '\n'.join(lines)
 
+# --- INTELLIGENT DATA EXTRACTION ENGINE ---
 def extract_pincode_and_mobile(text):
     pincode, mobile = "", ""
     if not text: return pincode, mobile
@@ -108,25 +112,18 @@ def extract_pincode_and_mobile(text):
         elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF OFFLINE CSV LOADER (CASE-INSENSITIVE) ---
+# --- BULLETPROOF OFFLINE CSV LOADER ---
 @st.cache_data(show_spinner=False)
 def load_pincode_database_records():
     csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
     if not os.path.exists(csv_path): return {}
     try:
         df = pd.read_csv(csv_path, dtype=str, on_bad_lines='skip')
-        
-        # Standardize all column names internally to lowercase to prevent matching errors
         df.columns = [str(c).lower().strip() for c in df.columns]
-        
-        if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns: 
-            return {}
-            
+        if 'pincode' not in df.columns or 'district' not in df.columns or 'statename' not in df.columns: return {}
         df['pincode'] = df['pincode'].fillna("").astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df = df[df['pincode'] != ""] 
         df_unique = df.drop_duplicates(subset=['pincode'], keep='first').fillna("")
-        
-        # Returns mapped dictionary: {'679101': {'district': 'PALAKKAD', 'statename': 'KERALA'}, ...}
         return df_unique.set_index('pincode').to_dict(orient='index')
     except Exception: return {}
 
@@ -165,7 +162,7 @@ def draw_single_label(entry, width_in, height_in):
     tracking_code = str(entry.get('tracking', '0000000000000'))
     article_type = str(entry.get('article', 'ARTICLE'))
     
-    # CRITICAL FIX: Direct class call instead of get_barcode_class
+    Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
     my_barcode = Code128(tracking_code, writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
@@ -308,11 +305,6 @@ if 'stage_err' not in st.session_state: st.session_state.stage_err = ""
 if 'stage_succ' not in st.session_state: st.session_state.stage_succ = ""
 if 'load_profile_dd' not in st.session_state: st.session_state.load_profile_dd = "-- Select Profile --"
 
-core_keys = ["s_addr", "s_mob", "r_addr", "r_mob", "r_pin", "w", "l", "b", "h", "cod", "cust", "load_profile_dd"]
-for k in core_keys:
-    if k not in st.session_state:
-        st.session_state[k] = "" if k != "load_profile_dd" else "-- Select Profile --"
-
 # --- SAFE CALLBACKS ---
 def s_addr_changed():
     sid = st.session_state.s_id
@@ -350,6 +342,7 @@ def execute_stage(tracking, article, pool_key, current_serial):
     current_u = st.session_state.username
     db = load_data()
     
+    # Failsafe if user was deleted mid-session
     if current_u not in db["users"]:
         st.session_state.stage_err = "Critical Error: User profile missing. Please log out."
         return
@@ -358,10 +351,10 @@ def execute_stage(tracking, article, pool_key, current_serial):
         "tracking": tracking, "from": from_val, "to": to_val, "article": article,
         "cod": st.session_state.get(f"cod_{rid}", "").strip(),
         "cust_id": st.session_state.get("cust_shared", "").strip(),
-        "weight": st.session_state.get("w", "").strip(),
-        "length": st.session_state.get("l", "").strip(),
-        "breadth": st.session_state.get("b", "").strip(),
-        "height": st.session_state.get("h", "").strip(),
+        "weight": st.session_state.get(f"w_{rid}", "").strip(),
+        "length": st.session_state.get(f"l_{rid}", "").strip(),
+        "breadth": st.session_state.get(f"b_{rid}", "").strip(),
+        "height": st.session_state.get(f"h_{rid}", "").strip(),
         "s_mob": st.session_state.get(f"s_mob_{sid}", "").strip(),
         "r_mob": st.session_state.get(f"r_mob_{rid}", "").strip(),
         "pincode": st.session_state.get(f"r_pin_{rid}", "").strip()
@@ -372,8 +365,6 @@ def execute_stage(tracking, article, pool_key, current_serial):
     save_data(db)
     
     st.session_state.r_id += 1 
-    if f"cod_{rid}" in st.session_state: del st.session_state[f"cod_{rid}"]
-    
     st.session_state.stage_succ = "Staged successfully! Ready for the next recipient."
 
 pincode_lookup_db = load_pincode_database_records()
@@ -424,7 +415,6 @@ if not st.session_state.authenticated:
                         data = load_data()
                         if user_id in data.get("users", {}): st.error("Occupied ID.")
                         else:
-                            if "users" not in data: data["users"] = {}
                             data["users"][user_id] = {
                                 "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
                                 "status": "active", "addresses": [], "used_barcodes": [], "generated_labels": [],
@@ -538,10 +528,10 @@ with tabs[0]:
             
             st.write("**Volumetric Specifications (Optional)**")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: st.text_input("Weight (g)", key="w")
-            with col_m2: st.text_input("Len (cm)", key="l")
-            with col_m3: st.text_input("Wid (cm)", key="b")
-            with col_m4: st.text_input("Hgt (cm)", key="h")
+            with col_m1: st.text_input("Weight (g)", key=f"w_{r_id}")
+            with col_m2: st.text_input("Len (cm)", key=f"l_{r_id}")
+            with col_m3: st.text_input("Wid (cm)", key=f"b_{r_id}")
+            with col_m4: st.text_input("Hgt (cm)", key=f"h_{r_id}")
                 
             col_mob1, col_mob2 = st.columns(2)
             with col_mob1: st.text_input("Sender Mobile (Optional)", key=f"s_mob_{s_id}")
