@@ -9,7 +9,7 @@ import base64
 import re
 import requests
 import pandas as pd
-from barcode import Code128
+from barcode.codex import Code128
 from barcode.writer import ImageWriter
 from PIL import Image, ImageDraw, ImageFont
 
@@ -32,9 +32,9 @@ BARCODE_POOL_KEYS = [
     "Business Parcel COD"
 ]
 
-# --- OMNIPRESENT DATABASE HEALER (Upgraded) ---
+# --- OMNIPRESENT DATABASE HEALER ---
 def load_data():
-    default_db = {"users": {}, "messages": []}
+    default_db = {"users": {}, "messages": [], "advertisements": []}
     if not os.path.exists(DATA_FILE): return default_db
     try:
         with open(DATA_FILE, "r") as f:
@@ -45,6 +45,7 @@ def load_data():
             
             if "users" not in data: data["users"] = {}
             if "messages" not in data: data["messages"] = []
+            if "advertisements" not in data: data["advertisements"] = []
             
             for uid, udata in data["users"].items():
                 if "used_barcodes" not in udata: udata["used_barcodes"] = []
@@ -52,7 +53,6 @@ def load_data():
                 if "addresses" not in udata: udata["addresses"] = []
                 if "barcodes" not in udata: udata["barcodes"] = {}
                 
-                # CRITICAL FIX: Ensures the Staged Queue exists AND scrubs out corrupted string data
                 if "staged_queue" not in udata: 
                     udata["staged_queue"] = []
                 else:
@@ -74,7 +74,6 @@ def get_pool_key(article_type):
         return "Speed Post Parcel (Regular & COD Shared Pool)"
     return article_type
 
-# --- UPU S10 COMPLIANT CHECK DIGIT ENGINE ---
 def calculate_upu_s10_check_digit(serial_8_digits):
     serial_str = f"{int(serial_8_digits):08d}"
     digits = [int(d) for d in serial_str]
@@ -86,7 +85,6 @@ def calculate_upu_s10_check_digit(serial_8_digits):
     elif c == 11: return "5"
     else: return str(c)
 
-# --- TEXT WRAPPING ENGINE ---
 def wrap_text_to_pixels(text, draw, font, max_width):
     text_str = str(text)
     lines = []
@@ -105,7 +103,6 @@ def wrap_text_to_pixels(text, draw, font, max_width):
         if current_line: lines.append(current_line)
     return '\n'.join(lines)
 
-# --- INTELLIGENT DATA EXTRACTION ENGINE ---
 def extract_pincode_and_mobile(text):
     pincode, mobile = "", ""
     if not text: return pincode, mobile
@@ -117,7 +114,6 @@ def extract_pincode_and_mobile(text):
         elif len(digits_only) in [11, 12, 13]: mobile = digits_only[-10:]
     return pincode, mobile
 
-# --- BULLETPROOF OFFLINE CSV LOADER ---
 @st.cache_data(show_spinner=False)
 def load_pincode_database_records():
     csv_path = os.path.join(BASE_DIR, "all_india_pincode_directory_2025.csv")
@@ -155,7 +151,6 @@ def split_address_to_lines(address_text):
         l3 = flat[140:190]
     return name, l1, l2, l3
 
-# --- LABEL GENERATOR ---
 def draw_single_label(entry, width_in, height_in):
     DPI = 300
     W_px = int(width_in * DPI)
@@ -302,6 +297,8 @@ else:
 # --- STRICT SESSION STATE INIT ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
+if 'seen_ads' not in st.session_state: st.session_state.seen_ads = False
+
 if 's_id' not in st.session_state: st.session_state.s_id = 0
 if 'r_id' not in st.session_state: st.session_state.r_id = 0
 if 'stage_err' not in st.session_state: st.session_state.stage_err = ""
@@ -353,7 +350,6 @@ def execute_stage(tracking, article, pool_key, current_serial):
         st.session_state.stage_err = "Critical Error: User profile missing. Please log out."
         return
 
-    # PUSHES DIRECTLY TO DATABASE STAGED QUEUE
     db["users"][current_u]["staged_queue"].append({
         "tracking": tracking, "from": from_val, "to": to_val, "article": article,
         "cod": st.session_state.get(f"cod_{rid}", "").strip() if "COD" in article else "",
@@ -406,6 +402,7 @@ if not st.session_state.authenticated:
                             else:
                                 st.session_state.authenticated = True
                                 st.session_state.username = user_id
+                                st.session_state.seen_ads = False # Reset ads viewer state on log in
                                 st.rerun()
                         else:
                             st.error("Invalid credentials.")
@@ -448,6 +445,26 @@ if current_user not in db["users"]:
     st.session_state.username = ""
     st.rerun()
 
+# --- ADVERTISEMENT POPUP INTERSTITIAL ---
+if not st.session_state.seen_ads and current_user.lower() != "admin":
+    active_ads = [ad for ad in db.get("advertisements", []) if ad.get("image")]
+    if active_ads:
+        st.markdown("<h2 style='text-align:center; color:#9c0000;'>📢 Important Announcements</h2>", unsafe_allow_html=True)
+        for idx, ad in enumerate(active_ads):
+            with st.container(border=True):
+                img_bytes = base64.b64decode(ad["image"])
+                st.image(img_bytes, use_column_width=True)
+                if ad.get("link"):
+                    st.markdown(f"<div style='text-align:center; margin-top: 10px;'><a href='{ad['link']}' target='_blank' style='font-size:18px; font-weight:bold; color:#0056b3; text-decoration:none;'>🔗 Click Here to Learn More</a></div>", unsafe_allow_html=True)
+        
+        st.write("")
+        if st.button("✖️ Continue to My Account Dashboard", type="primary", use_container_width=True):
+            st.session_state.seen_ads = True
+            st.rerun()
+        st.stop() # HALTS APP LOADING UNTIL THEY DISMISS IT
+    else:
+        st.session_state.seen_ads = True # No ads, skip in future
+
 user_profile = db["users"][current_user]
 staged_items = user_profile.get("staged_queue", [])
 
@@ -488,6 +505,7 @@ tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 
 if current_user.lower() == "admin": 
     tabs_list.append("👥 Admin Directory")
     tabs_list.append("✉️ Message Center")
+    tabs_list.append("📢 Ad Manager") # NEW TAB
 tabs = st.tabs(tabs_list)
 
 # --- TAB 1: DISPATCH MANAGER ---
@@ -554,8 +572,6 @@ with tabs[0]:
             shared_pool_key = get_pool_key(article_type)
             b_current = user_profile["barcodes"][shared_pool_key]
             used_set = set(user_profile.get("used_barcodes", []))
-            
-            # Reads from permanent database queue instead of volatile session state
             queue_set = {item.get("tracking") for item in staged_items if isinstance(item, dict)}
 
             if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
@@ -593,7 +609,6 @@ with tabs[0]:
             else:
                 st.markdown(f"**Total Items Staged:** {len(staged_items)}")
                 
-                # --- INDIVIDUAL DELETION LIST VIEW ---
                 for idx, item in enumerate(reversed(staged_items)):
                     real_idx = len(staged_items) - 1 - idx
                     col1, col2 = st.columns([0.75, 0.25])
@@ -630,7 +645,6 @@ with tabs[0]:
                 
                 st.write("---")
                 
-                # EMPTY ENTIRE QUEUE BUTTON
                 if st.button("🗑️ Empty Entire Queue (Return All Barcodes)", use_container_width=True):
                     for item in staged_items:
                         if item["tracking"] in db["users"][current_user]["used_barcodes"]:
@@ -659,7 +673,6 @@ with tabs[0]:
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
                                 if lbl_canvas: pdf_pages.append(lbl_canvas)
                                 
-                                # OFFLINE CSV SECURE LOOKUP
                                 r_pin_clean = str(entry.get('pincode', '')).strip().split('.')[0]
                                 if not r_pin_clean:
                                     r_pin_clean, _ = extract_pincode_and_mobile(entry.get('to', ''))
@@ -674,7 +687,6 @@ with tabs[0]:
                                 if not isinstance(s_pin_details, dict): s_pin_details = {}
                                 _, s_l1, s_l2, _ = split_address_to_lines(entry.get('from', ''))
                                 
-                                # EXCEL INJECTIONS
                                 ws.cell(row=next_row, column=1, value=idx + 1)
                                 ws.cell(row=next_row, column=2, value=entry.get('tracking', ''))
                                 ws.cell(row=next_row, column=3, value=safe_numeric(entry.get('weight', '')))
@@ -711,11 +723,9 @@ with tabs[0]:
                                 ws.cell(row=next_row, column=48, value=str(s_pin_details.get('statename', '')).upper())
                                 
                                 next_row += 1
-                                # Sweep compiled item into permanent history
                                 user_profile["generated_labels"].append(entry)
                                 
-                            # PURGE QUEUE UPON SUCCESSFUL COMPILE
-                            user_profile["staged_queue"] = []
+                            db["users"][current_user]["staged_queue"] = []
                             db["users"][current_user] = user_profile
                             save_data(db)
                             
@@ -811,7 +821,7 @@ with tabs[2]:
                             st.rerun()
                 st.markdown("<hr style='margin:10px 0; border-color:rgba(156,0,0,0.15);'>", unsafe_allow_html=True)
 
-# --- TABS 4 & 5: ADMIN CONTROLS ---
+# --- TABS 4, 5 & 6: ADMIN CONTROLS ---
 if current_user.lower() == "admin":
     with tabs[3]:
         with st.container(border=True):
@@ -899,3 +909,40 @@ if current_user.lower() == "admin":
                                 db["messages"].pop(real_idx)
                                 save_data(db)
                                 st.rerun()
+                                
+    with tabs[5]:
+        with st.container(border=True):
+            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>📢 Custom Advertisements & Popups</h4>", unsafe_allow_html=True)
+            st.info("Upload up to 5 images. These will pop up for every user upon their first login.")
+            
+            ads = db.get("advertisements", [])
+            while len(ads) < 5: ads.append({"image": "", "link": ""})
+            
+            for i in range(5):
+                with st.expander(f"Advertisement Slot {i+1}", expanded=True):
+                    if ads[i].get("image"):
+                        img_bytes = base64.b64decode(ads[i]["image"])
+                        st.image(img_bytes, width=300)
+                        if st.button("🗑️ Delete this Ad", key=f"del_ad_{i}"):
+                            ads[i] = {"image": "", "link": ""}
+                            db["advertisements"] = ads
+                            save_data(db)
+                            st.rerun()
+                    
+                    new_link = st.text_input("Ad Link (Optional)", value=ads[i].get("link", ""), key=f"ad_link_{i}")
+                    new_img = st.file_uploader("Upload Image (PNG/JPG)", type=["png", "jpg", "jpeg"], key=f"ad_img_{i}")
+                    
+                    if st.button("💾 Save Advertisement", key=f"save_ad_{i}", type="primary"):
+                        if new_img is not None:
+                            img = Image.open(new_img)
+                            img.thumbnail((800, 800))
+                            buf = io.BytesIO()
+                            img.save(buf, format="PNG")
+                            b64_str = base64.b64encode(buf.getvalue()).decode()
+                            ads[i]["image"] = b64_str
+                        
+                        ads[i]["link"] = new_link.strip()
+                        db["advertisements"] = ads
+                        save_data(db)
+                        st.success("Advertisement saved! Users will see it on their next login.")
+                        st.rerun()
