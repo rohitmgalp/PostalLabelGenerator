@@ -32,11 +32,10 @@ BARCODE_POOL_KEYS = [
     "Business Parcel COD"
 ]
 
-# --- OMNIPRESENT DATABASE HEALER ---
+# --- OMNIPRESENT DATABASE HEALER (Upgraded) ---
 def load_data():
     default_db = {"users": {}, "messages": []}
-    if not os.path.exists(DATA_FILE): 
-        return default_db
+    if not os.path.exists(DATA_FILE): return default_db
     try:
         with open(DATA_FILE, "r") as f:
             content = f.read().strip()
@@ -44,7 +43,6 @@ def load_data():
             data = json.loads(content)
             if not isinstance(data, dict): return default_db
             
-            # This completely eliminates KeyErrors. It forces the structure to exist.
             if "users" not in data: data["users"] = {}
             if "messages" not in data: data["messages"] = []
             
@@ -53,6 +51,13 @@ def load_data():
                 if "generated_labels" not in udata: udata["generated_labels"] = []
                 if "addresses" not in udata: udata["addresses"] = []
                 if "barcodes" not in udata: udata["barcodes"] = {}
+                
+                # CRITICAL FIX: Ensures the Staged Queue exists AND scrubs out corrupted string data
+                if "staged_queue" not in udata: 
+                    udata["staged_queue"] = []
+                else:
+                    udata["staged_queue"] = [item for item in udata["staged_queue"] if isinstance(item, dict)]
+                    
                 for pk in BARCODE_POOL_KEYS:
                     if pk not in udata["barcodes"]:
                         udata["barcodes"][pk] = {"prefix": "", "current": 0, "end": 0, "suffix": ""}
@@ -162,7 +167,6 @@ def draw_single_label(entry, width_in, height_in):
     tracking_code = str(entry.get('tracking', '0000000000000'))
     article_type = str(entry.get('article', 'ARTICLE'))
     
-    Code128 = barcode.get_barcode_class('code128')
     bc_buffer = io.BytesIO()
     my_barcode = Code128(tracking_code, writer=ImageWriter())
     my_barcode.write(bc_buffer, options={"write_text": False, "background": "white", "quiet_zone": 1.0})
@@ -298,12 +302,15 @@ else:
 # --- STRICT SESSION STATE INIT ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
-if 'web_queue' not in st.session_state: st.session_state.web_queue = []
 if 's_id' not in st.session_state: st.session_state.s_id = 0
 if 'r_id' not in st.session_state: st.session_state.r_id = 0
 if 'stage_err' not in st.session_state: st.session_state.stage_err = ""
 if 'stage_succ' not in st.session_state: st.session_state.stage_succ = ""
 if 'load_profile_dd' not in st.session_state: st.session_state.load_profile_dd = "-- Select Profile --"
+
+core_keys = ["s_addr", "s_mob", "r_addr", "r_mob", "r_pin", "w", "l", "b", "h", "cod", "cust"]
+for k in core_keys:
+    if k not in st.session_state: st.session_state[k] = ""
 
 # --- SAFE CALLBACKS ---
 def s_addr_changed():
@@ -342,19 +349,19 @@ def execute_stage(tracking, article, pool_key, current_serial):
     current_u = st.session_state.username
     db = load_data()
     
-    # Failsafe if user was deleted mid-session
     if current_u not in db["users"]:
         st.session_state.stage_err = "Critical Error: User profile missing. Please log out."
         return
 
-    st.session_state.web_queue.append({
+    # PUSHES DIRECTLY TO DATABASE STAGED QUEUE
+    db["users"][current_u]["staged_queue"].append({
         "tracking": tracking, "from": from_val, "to": to_val, "article": article,
-        "cod": st.session_state.get(f"cod_{rid}", "").strip(),
+        "cod": st.session_state.get(f"cod_{rid}", "").strip() if "COD" in article else "",
         "cust_id": st.session_state.get("cust_shared", "").strip(),
-        "weight": st.session_state.get(f"w_{rid}", "").strip(),
-        "length": st.session_state.get(f"l_{rid}", "").strip(),
-        "breadth": st.session_state.get(f"b_{rid}", "").strip(),
-        "height": st.session_state.get(f"h_{rid}", "").strip(),
+        "weight": st.session_state.get("w", "").strip(),
+        "length": st.session_state.get("l", "").strip(),
+        "breadth": st.session_state.get("b", "").strip(),
+        "height": st.session_state.get("h", "").strip(),
         "s_mob": st.session_state.get(f"s_mob_{sid}", "").strip(),
         "r_mob": st.session_state.get(f"r_mob_{rid}", "").strip(),
         "pincode": st.session_state.get(f"r_pin_{rid}", "").strip()
@@ -365,6 +372,7 @@ def execute_stage(tracking, article, pool_key, current_serial):
     save_data(db)
     
     st.session_state.r_id += 1 
+    if f"cod_{rid}" in st.session_state: del st.session_state[f"cod_{rid}"]
     st.session_state.stage_succ = "Staged successfully! Ready for the next recipient."
 
 pincode_lookup_db = load_pincode_database_records()
@@ -415,9 +423,10 @@ if not st.session_state.authenticated:
                         data = load_data()
                         if user_id in data.get("users", {}): st.error("Occupied ID.")
                         else:
+                            if "users" not in data: data["users"] = {}
                             data["users"][user_id] = {
                                 "name": reg_name, "email": reg_email, "mobile": reg_mobile, "password": password,
-                                "status": "active", "addresses": [], "used_barcodes": [], "generated_labels": [],
+                                "status": "active", "addresses": [], "used_barcodes": [], "generated_labels": [], "staged_queue": [],
                                 "barcodes": {k: {"prefix": "", "current": 0, "end": 0, "suffix": ""} for k in BARCODE_POOL_KEYS}
                             }
                             save_data(data)
@@ -440,6 +449,7 @@ if current_user not in db["users"]:
     st.rerun()
 
 user_profile = db["users"][current_user]
+staged_items = user_profile.get("staged_queue", [])
 
 # --- DASHBOARD HEADER ---
 col_logout_wrap = st.columns([0.80, 0.20])
@@ -528,10 +538,10 @@ with tabs[0]:
             
             st.write("**Volumetric Specifications (Optional)**")
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: st.text_input("Weight (g)", key=f"w_{r_id}")
-            with col_m2: st.text_input("Len (cm)", key=f"l_{r_id}")
-            with col_m3: st.text_input("Wid (cm)", key=f"b_{r_id}")
-            with col_m4: st.text_input("Hgt (cm)", key=f"h_{r_id}")
+            with col_m1: st.text_input("Weight (g)", key="w")
+            with col_m2: st.text_input("Len (cm)", key="l")
+            with col_m3: st.text_input("Wid (cm)", key="b")
+            with col_m4: st.text_input("Hgt (cm)", key="h")
                 
             col_mob1, col_mob2 = st.columns(2)
             with col_mob1: st.text_input("Sender Mobile (Optional)", key=f"s_mob_{s_id}")
@@ -544,7 +554,9 @@ with tabs[0]:
             shared_pool_key = get_pool_key(article_type)
             b_current = user_profile["barcodes"][shared_pool_key]
             used_set = set(user_profile.get("used_barcodes", []))
-            queue_set = {item.get("tracking") for item in st.session_state.web_queue if isinstance(item, dict)}
+            
+            # Reads from permanent database queue instead of volatile session state
+            queue_set = {item.get("tracking") for item in staged_items if isinstance(item, dict)}
 
             if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
                 st.error(f"❌ Shared series empty! Configure ranges for: {shared_pool_key}")
@@ -575,16 +587,59 @@ with tabs[0]:
     with col_preview:
         with st.container(border=True):
             st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⏳ Staged Processing Queue</h4>", unsafe_allow_html=True)
-            if st.session_state.web_queue:
-                display_df = pd.DataFrame([item for item in st.session_state.web_queue if isinstance(item, dict)])[["tracking", "article", "weight", "cust_id"]]
-                st.dataframe(display_df, use_container_width=True)
-                if st.button("🗑️ Wipe Entire Active Session Queue"):
-                    st.session_state.web_queue = []
+            
+            if not staged_items:
+                st.info("The dispatch pipeline queue is currently clean.")
+            else:
+                st.markdown(f"**Total Items Staged:** {len(staged_items)}")
+                
+                # --- INDIVIDUAL DELETION LIST VIEW ---
+                for idx, item in enumerate(reversed(staged_items)):
+                    real_idx = len(staged_items) - 1 - idx
+                    col1, col2 = st.columns([0.75, 0.25])
+                    with col1:
+                        st.write(f"📦 `{item['tracking']}` | **{item['article']}**")
+                        st.caption(f"To: {item.get('to', '').splitlines()[0][:35]}...")
+                    with col2:
+                        if st.button("🗑️ Delete", key=f"del_stg_{real_idx}"):
+                            st.session_state[f"stg_prompt_{real_idx}"] = True
+                    
+                    if st.session_state.get(f"stg_prompt_{real_idx}", False):
+                        st.warning("Return this barcode to your available range?")
+                        c1, c2, c3 = st.columns([0.3, 0.3, 0.4])
+                        with c1:
+                            if st.button("Yes (Return)", key=f"sy_{real_idx}"):
+                                if item['tracking'] in db["users"][current_user]["used_barcodes"]:
+                                    db["users"][current_user]["used_barcodes"].remove(item['tracking'])
+                                db["users"][current_user]["staged_queue"].pop(real_idx)
+                                save_data(db)
+                                del st.session_state[f"stg_prompt_{real_idx}"]
+                                st.rerun()
+                        with c2:
+                            if st.button("No (Burn)", key=f"sn_{real_idx}"):
+                                db["users"][current_user]["staged_queue"].pop(real_idx)
+                                save_data(db)
+                                del st.session_state[f"stg_prompt_{real_idx}"]
+                                st.rerun()
+                        with c3:
+                            if st.button("Cancel", key=f"sc_{real_idx}"):
+                                del st.session_state[f"stg_prompt_{real_idx}"]
+                                st.rerun()
+                                
+                    st.markdown("<hr style='margin:5px 0; border-color:rgba(156,0,0,0.1);'>", unsafe_allow_html=True)
+                
+                st.write("---")
+                
+                # EMPTY ENTIRE QUEUE BUTTON
+                if st.button("🗑️ Empty Entire Queue (Return All Barcodes)", use_container_width=True):
+                    for item in staged_items:
+                        if item["tracking"] in db["users"][current_user]["used_barcodes"]:
+                            db["users"][current_user]["used_barcodes"].remove(item["tracking"])
+                    db["users"][current_user]["staged_queue"] = []
+                    save_data(db)
                     st.rerun()
                     
-                st.write("---")
                 st.subheader("Compile Outputs")
-                
                 if st.button("⚙️ Compile Label PDFs & Sync Template Matrix", type="primary"):
                     template_filename = os.path.join(BASE_DIR, "New Format bulk.xlsx")
                     if not os.path.exists(template_filename): template_filename = os.path.join(BASE_DIR, "Template_Master.xlsx")
@@ -598,7 +653,7 @@ with tabs[0]:
                             ws = wb.active
                             next_row = ws.max_row + 1
                             
-                            for idx, entry in enumerate(st.session_state.web_queue):
+                            for idx, entry in enumerate(staged_items):
                                 if not isinstance(entry, dict): continue
                                     
                                 lbl_canvas = draw_single_label(entry, width_in, height_in)
@@ -656,8 +711,11 @@ with tabs[0]:
                                 ws.cell(row=next_row, column=48, value=str(s_pin_details.get('statename', '')).upper())
                                 
                                 next_row += 1
+                                # Sweep compiled item into permanent history
                                 user_profile["generated_labels"].append(entry)
                                 
+                            # PURGE QUEUE UPON SUCCESSFUL COMPILE
+                            user_profile["staged_queue"] = []
                             db["users"][current_user] = user_profile
                             save_data(db)
                             
@@ -669,11 +727,8 @@ with tabs[0]:
                             excel_buffer = io.BytesIO()
                             wb.save(excel_buffer)
                             st.session_state.excel_ready = excel_buffer.getvalue()
-                            st.session_state.web_queue = [] 
                             st.success("Compilation complete! Web download links active.")
                             st.rerun()
-            else:
-                st.info("The dispatch pipeline queue is currently clean.")
 
             if 'pdf_ready' in st.session_state or 'excel_ready' in st.session_state:
                 st.write("---")
