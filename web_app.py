@@ -402,7 +402,7 @@ if not st.session_state.authenticated:
                             else:
                                 st.session_state.authenticated = True
                                 st.session_state.username = user_id
-                                st.session_state.seen_ads = False # Reset ads viewer state on log in
+                                st.session_state.seen_ads = False
                                 st.rerun()
                         else:
                             st.error("Invalid credentials.")
@@ -461,9 +461,9 @@ if not st.session_state.seen_ads and current_user.lower() != "admin":
         if st.button("✖️ Continue to My Account Dashboard", type="primary", use_container_width=True):
             st.session_state.seen_ads = True
             st.rerun()
-        st.stop() # HALTS APP LOADING UNTIL THEY DISMISS IT
+        st.stop()
     else:
-        st.session_state.seen_ads = True # No ads, skip in future
+        st.session_state.seen_ads = True
 
 user_profile = db["users"][current_user]
 staged_items = user_profile.get("staged_queue", [])
@@ -505,7 +505,7 @@ tabs_list = ["📋 Dispatch Manager", "⚙️ Settings & Barcode Ranges", "📇 
 if current_user.lower() == "admin": 
     tabs_list.append("👥 Admin Directory")
     tabs_list.append("✉️ Message Center")
-    tabs_list.append("📢 Ad Manager") # NEW TAB
+    tabs_list.append("📢 Ad Manager")
 tabs = st.tabs(tabs_list)
 
 # --- TAB 1: DISPATCH MANAGER ---
@@ -784,7 +784,9 @@ with tabs[2]:
         else:
             for idx, item in enumerate(reversed(archive)):
                 real_idx = len(archive) - 1 - idx
-                row_cols = st.columns([0.5, 0.25, 0.25])
+                
+                # --- NEW FEATURE: TRACK BUTTON ADDED HERE ---
+                row_cols = st.columns([0.4, 0.2, 0.2, 0.2])
                 with row_cols[0]:
                     st.write(f"**Barcode:** `{item['tracking']}` | **Type:** {item['article']}")
                     st.caption(f"**Recipient:** {item['to'].splitlines()[0][:35]}...")
@@ -793,9 +795,30 @@ with tabs[2]:
                     if lbl_canvas:
                         reprint_buf = io.BytesIO()
                         lbl_canvas.save(reprint_buf, "PDF", resolution=300.0)
-                        st.download_button("🖨️ Reprint PDF", data=reprint_buf.getvalue(), file_name=f"Reprint_{item['tracking']}.pdf", mime="application/pdf", key=f"rep_{item['tracking']}_{real_idx}")
+                        st.download_button("🖨️ Reprint PDF", data=reprint_buf.getvalue(), file_name=f"Reprint_{item['tracking']}.pdf", mime="application/pdf", key=f"rep_{item['tracking']}_{real_idx}", use_container_width=True)
                 with row_cols[2]:
-                    if st.button(f"🗑️ Delete Record", key=f"del_init_{real_idx}"): st.session_state[f"confirm_prompt_{real_idx}"] = True
+                    track_url = f"https://myspeedpost.com/s/{str(item['tracking']).upper()}"
+                    st.markdown(f"""
+                        <a href="{track_url}" target="_blank" style="
+                            text-decoration: none;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            width: 100%;
+                            height: 38px;
+                            background-color: #ffffff;
+                            color: #31333F;
+                            border: 1px solid #d5dce5;
+                            border-radius: 8px;
+                            font-size: 14px;
+                            font-family: 'Source Sans Pro', sans-serif;
+                            transition: border-color 0.2s, color 0.2s;
+                        " onmouseover="this.style.borderColor='#9c0000'; this.style.color='#9c0000';" onmouseout="this.style.borderColor='#d5dce5'; this.style.color='#31333F';">
+                            🌐 Track
+                        </a>
+                    """, unsafe_allow_html=True)
+                with row_cols[3]:
+                    if st.button(f"🗑️ Delete", key=f"del_init_{real_idx}", use_container_width=True): st.session_state[f"confirm_prompt_{real_idx}"] = True
                 
                 if st.session_state.get(f"confirm_prompt_{real_idx}", False):
                     st.markdown(f"❓ **Do you want to reuse barcode `{item['tracking']}`?**")
