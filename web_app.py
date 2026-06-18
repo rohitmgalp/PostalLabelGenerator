@@ -1,4 +1,8 @@
 import streamlit as st
+
+# THIS MUST BE THE FIRST COMMAND
+st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
+
 import openpyxl
 import os
 import sys
@@ -7,7 +11,6 @@ import time
 import io
 import base64
 import re
-import requests
 import pandas as pd
 from barcode.codex import Code128
 from barcode.writer import ImageWriter
@@ -247,51 +250,82 @@ def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
 
-# --- STYLING & SETTINGS ---
-st.set_page_config(page_title="India Post Enterprise Workspace", page_icon="📮", layout="wide")
-bg_file_path = os.path.join(BASE_DIR, "background.png")
+# ==========================================
+# UI COMPONENTS (ISOLATED TO PREVENT ERRORS)
+# ==========================================
 
-whatsapp_html = """
+# 1. Hide Streamlit Chrome
+st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden !important; display: none !important;}
+        footer {visibility: hidden !important; display: none !important;}
+        header {visibility: hidden !important; display: none !important;}
+        [data-testid="stHeader"] {visibility: hidden !important; display: none !important;}
+        [data-testid="stToolbar"] {visibility: hidden !important; display: none !important;}
+        [data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
+        [data-testid="stStatusWidget"] {visibility: hidden !important; display: none !important;}
+        .stDeployButton {display: none !important;}
+    </style>
+""", unsafe_allow_html=True)
+
+# 2. Custom Footer & WhatsApp Button
+st.markdown("""
+    <style>
+        .custom-footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background-color: rgba(255, 255, 255, 0.95);
+            color: #475569;
+            text-align: center;
+            padding: 10px 0;
+            font-size: 13px;
+            font-weight: 600;
+            z-index: 99998;
+            border-top: 1px solid #e2e8f0;
+            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+        .whatsapp-float {
+            position: fixed; bottom: 50px; right: 24px; background-color: #25d366; color: white !important;
+            padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: 'Segoe UI', sans-serif;
+            font-weight: 700; font-size: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.22); z-index: 99999;
+            display: inline-flex; align-items: center; transition: transform 0.2s ease, background-color 0.2s ease;
+        }
+        .whatsapp-float:hover { background-color: #1ebd58; transform: scale(1.05); }
+    </style>
+    
+    <div class="custom-footer">
+        ⚠️ Not an official website, maintained for educational purposes only
+    </div>
+    
     <a href="https://wa.me/918075386388" target="_blank" class="whatsapp-float">
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="margin-right: 8px; display: inline-block; vertical-align: middle;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="margin-right: 8px;">
             <path d="M13.601 2.326A7.85 7.85 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.9 7.9 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.9 7.9 0 0 0 13.6 2.326zM7.994 14.521a6.6 6.6 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c1.11-4.285 4.564-6.574 8.718-6.574a6.58 6.58 0 0 1 4.66 2.72 6.58 6.58 0 0 1 1.936 4.663c-.004 4.2-3.563 7.759-7.923 7.759M11.57 9.447c-.19-.094-1.127-.556-1.301-.62-.174-.064-.3-.094-.426.094-.126.188-.488.62-.6.749-.113.128-.226.144-.417.05-.19-.095-.807-.296-1.536-.855-.567-.457-.951-1.022-1.062-1.116-.112-.094-.012-.145.083-.242.085-.087.174-.188.26-.283.085-.087.174-.188.26-.283.087-.095.116-.16.174-.319.059-.158.03-.3-.015-.394-.045-.094-.426-1.026-.583-1.409-.153-.367-.307-.317-.418-.317-.109-.004-.234-.004-.36-.004a.69.69 0 0 0-.5.234c-.174.188-.665.65-0.665 1.583s.678 1.834.773 1.96c.095.127 1.332 2.035 3.226 2.856.45.195.8.311 1.075.398.452.144.863.124 1.189.062.363-.069 1.127-.461 1.284-.906.158-.444.158-.825.11-1.013-.048-.19-.174-.3-.365-.394"/>
         </svg>Contact Us
     </a>
-"""
+""", unsafe_allow_html=True)
 
+# 3. Dynamic Background
+bg_file_path = os.path.join(BASE_DIR, "background.png")
 if os.path.exists(bg_file_path):
     encoded_bg = get_base64_image(bg_file_path)
     st.markdown(f"""
         <style>
             .stApp {{ background-image: url("data:image/png;base64,{encoded_bg}"); background-size: cover; background-position: center; background-attachment: fixed; }}
-            div[data-testid="stHeader"] {{ background: transparent !important; }}
             .stTextInput input, .stTextArea textarea, .stSelectbox div {{ border-color: #cbd5e1 !important; background-color: #ffffff !important; color: #0f172a !important; }}
-            div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
-            div.stButton > button[type="primary"]:hover {{ background-color: #bd0000 !important; }}
-            .whatsapp-float {{
-                position: fixed; bottom: 24px; right: 24px; background-color: #25d366; color: white !important;
-                padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: 'Segoe UI', sans-serif;
-                font-weight: 700; font-size: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.22); z-index: 99999;
-                display: inline-flex; align-items: center; transition: transform 0.2s ease, background-color 0.2s ease;
-            }}
-            .whatsapp-float:hover {{ background-color: #1ebd58; transform: scale(1.05); }}
+            div.stButton > button[type="primary"] {{ background-color: #0f52ba !important; color: white !important; border: none !important; font-weight: bold !important; padding: 10px 24px !important; border-radius: 8px !important; }}
+            div.stButton > button[type="primary"]:hover {{ background-color: #08338f !important; }}
         </style>
-        {whatsapp_html}
     """, unsafe_allow_html=True)
 else:
-    st.markdown(f"""
+    st.markdown("""
         <style>
-            .stApp {{ background-color: #fdfbf7; }}
-            div.stButton > button[type="primary"] {{ background-color: #9c0000 !important; color: white !important; }}
-            .whatsapp-float {{
-                position: fixed; bottom: 24px; right: 24px; background-color: #25d366; color: white !important;
-                padding: 12px 22px; border-radius: 30px; text-decoration: none !important; font-family: sans-serif;
-                font-weight: 700; font-size: 14px; box-shadow: 0 4px 15px rgba(0,0,0,0.22); z-index: 99999;
-                display: inline-flex; align-items: center; transition: transform 0.2s ease;
-            }}
-            .whatsapp-float:hover {{ transform: scale(1.05); }}
+            .stApp { background-color: #fdfbf7; }
+            div.stButton > button[type="primary"] { background-color: #0f52ba !important; color: white !important; }
+            div.stButton > button[type="primary"]:hover { background-color: #08338f !important; }
         </style>
-        {whatsapp_html}
     """, unsafe_allow_html=True)
 
 # --- STRICT SESSION STATE INIT ---
@@ -350,20 +384,21 @@ def execute_stage(tracking, article, pool_key, current_serial):
         st.session_state.stage_err = "Critical Error: User profile missing. Please log out."
         return
 
+    # Scrubs tracking details instantly to prevent TypeErrors
     db["users"][current_u]["staged_queue"].append({
-        "tracking": tracking, "from": from_val, "to": to_val, "article": article,
-        "cod": st.session_state.get(f"cod_{rid}", "").strip() if "COD" in article else "",
-        "cust_id": st.session_state.get("cust_shared", "").strip(),
-        "weight": st.session_state.get("w", "").strip(),
-        "length": st.session_state.get("l", "").strip(),
-        "breadth": st.session_state.get("b", "").strip(),
-        "height": st.session_state.get("h", "").strip(),
-        "s_mob": st.session_state.get(f"s_mob_{sid}", "").strip(),
-        "r_mob": st.session_state.get(f"r_mob_{rid}", "").strip(),
-        "pincode": st.session_state.get(f"r_pin_{rid}", "").strip()
+        "tracking": str(tracking), "from": str(from_val), "to": str(to_val), "article": str(article),
+        "cod": str(st.session_state.get(f"cod_{rid}", "")).strip() if "COD" in article else "",
+        "cust_id": str(st.session_state.get("cust_shared", "")).strip(),
+        "weight": str(st.session_state.get("w", "")).strip(),
+        "length": str(st.session_state.get("l", "")).strip(),
+        "breadth": str(st.session_state.get("b", "")).strip(),
+        "height": str(st.session_state.get("h", "")).strip(),
+        "s_mob": str(st.session_state.get(f"s_mob_{sid}", "")).strip(),
+        "r_mob": str(st.session_state.get(f"r_mob_{rid}", "")).strip(),
+        "pincode": str(st.session_state.get(f"r_pin_{rid}", "")).strip()
     })
     
-    db["users"][current_u]["used_barcodes"].append(tracking)
+    db["users"][current_u]["used_barcodes"].append(str(tracking))
     db["users"][current_u]["barcodes"][pool_key]["current"] = current_serial + 1
     save_data(db)
     
@@ -376,19 +411,19 @@ pincode_lookup_db = load_pincode_database_records()
 # --- AUTHENTICATION ---
 if not st.session_state.authenticated:
     st.markdown("""
-        <div style="text-align: left; margin-top: 15px; margin-bottom: 25px; font-family: 'Segoe UI', system-ui, sans-serif;">
-            <h1 style="color: #9c0000; font-size: 3.4rem; font-weight: 800; margin: 0; line-height: 1.1; letter-spacing: -0.5px;">India Post</h1>
-            <h2 style="color: #334155; font-size: 1.9rem; font-weight: 600; margin-top: 4px; margin-bottom: 8px; opacity: 0.95;">Enterprise Web Portal</h2>
+        <div style="text-align: center; margin-top: 5vh; margin-bottom: 35px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+            <h1 style="color: #0f52ba; font-size: 3.8rem; font-weight: 900; margin: 0; line-height: 1.1; letter-spacing: 1.5px; text-transform: uppercase;">India Post</h1>
+            <h2 style="color: #475569; font-size: 1.5rem; font-weight: 600; margin-top: 8px; margin-bottom: 8px; letter-spacing: 3px; text-transform: uppercase;">Enterprise Web Portal</h2>
+            <div style="height: 3px; background: linear-gradient(90deg, transparent, #0f52ba, transparent); width: 50%; margin: 20px auto 0;"></div>
         </div>
-        <div style="height: 1px; background: rgba(156, 0, 0, 0.15); margin-bottom: 30px;"></div>
     """, unsafe_allow_html=True)
 
-    auth_cols = st.columns([0.4, 0.6])
-    with auth_cols[0]:
+    auth_cols = st.columns([0.3, 0.4, 0.3])
+    with auth_cols[1]:
         with st.container(border=True):
             auth_mode = st.radio("Access Control Node", ["Login to Existing Profile", "Register New Corporate Profile"])
             if auth_mode == "Login to Existing Profile":
-                st.markdown("<h4 style='color:#9c0000; margin-top:10px;'>🔐 Sign In</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:#0f52ba; margin-top:10px;'>🔐 Sign In</h4>", unsafe_allow_html=True)
                 user_id = st.text_input("User ID").strip()
                 password = st.text_input("Password", type="password").strip()
                 if st.button("Verify & Enter Portal", type="primary", use_container_width=True):
@@ -407,7 +442,7 @@ if not st.session_state.authenticated:
                         else:
                             st.error("Invalid credentials.")
             else:
-                st.markdown("<h4 style='color:#9c0000; margin-top:10px;'>📝 Register</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:#0f52ba; margin-top:10px;'>📝 Register</h4>", unsafe_allow_html=True)
                 reg_name = st.text_input("Full Name / Company Name").strip()
                 reg_email = st.text_input("Email ID").strip()
                 reg_mobile = st.text_input("Mobile Number").strip()
@@ -449,7 +484,7 @@ if current_user not in db["users"]:
 if not st.session_state.seen_ads and current_user.lower() != "admin":
     active_ads = [ad for ad in db.get("advertisements", []) if ad.get("image")]
     if active_ads:
-        st.markdown("<h2 style='text-align:center; color:#9c0000;'>📢 Important Announcements</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align:center; color:#0f52ba;'>📢 Important Announcements</h2>", unsafe_allow_html=True)
         for idx, ad in enumerate(active_ads):
             with st.container(border=True):
                 img_bytes = base64.b64decode(ad["image"])
@@ -514,7 +549,7 @@ with tabs[0]:
     
     with col_inputs:
         with st.container(border=True):
-            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>📦 Shipment Properties</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:#0f52ba; margin-top:0;'>📦 Shipment Properties</h4>", unsafe_allow_html=True)
             col_w_in, col_h_in = st.columns(2)
             with col_w_in: width_in = st.number_input("Label Width (Inches)", value=6.0, step=0.5)
             with col_h_in: height_in = st.number_input("Label Height (Inches)", value=4.0, step=0.5)
@@ -571,8 +606,9 @@ with tabs[0]:
 
             shared_pool_key = get_pool_key(article_type)
             b_current = user_profile["barcodes"][shared_pool_key]
-            used_set = set(user_profile.get("used_barcodes", []))
-            queue_set = {item.get("tracking") for item in staged_items if isinstance(item, dict)}
+            
+            used_set = set([str(bc) for bc in user_profile.get("used_barcodes", []) if isinstance(bc, (str, int))])
+            queue_set = {str(item.get("tracking")) for item in staged_items if isinstance(item, dict) and item.get("tracking")}
 
             if b_current["current"] == 0 or b_current["current"] > b_current["end"]:
                 st.error(f"❌ Shared series empty! Configure ranges for: {shared_pool_key}")
@@ -602,7 +638,7 @@ with tabs[0]:
 
     with col_preview:
         with st.container(border=True):
-            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⏳ Staged Processing Queue</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:#0f52ba; margin-top:0;'>⏳ Staged Processing Queue</h4>", unsafe_allow_html=True)
             
             if not staged_items:
                 st.info("The dispatch pipeline queue is currently clean.")
@@ -641,7 +677,7 @@ with tabs[0]:
                                 del st.session_state[f"stg_prompt_{real_idx}"]
                                 st.rerun()
                                 
-                    st.markdown("<hr style='margin:5px 0; border-color:rgba(156,0,0,0.1);'>", unsafe_allow_html=True)
+                    st.markdown("<hr style='margin:5px 0; border-color:rgba(15,82,186,0.1);'>", unsafe_allow_html=True)
                 
                 st.write("---")
                 
@@ -742,7 +778,7 @@ with tabs[0]:
 
             if 'pdf_ready' in st.session_state or 'excel_ready' in st.session_state:
                 st.write("---")
-                st.markdown("<h5 style='color:#9c0000; margin-top:0;'>📥 Generated Files Cache</h5>", unsafe_allow_html=True)
+                st.markdown("<h5 style='color:#0f52ba; margin-top:0;'>📥 Generated Files Cache</h5>", unsafe_allow_html=True)
                 batch_timestamp = int(time.time())
                 
                 if 'pdf_ready' in st.session_state:
@@ -758,7 +794,7 @@ with tabs[0]:
 # --- TAB 2: RANGE SETTINGS ---
 with tabs[1]:
     with st.container(border=True):
-        st.markdown("<h4 style='color:#9c0000; margin-top:0;'>⚙️ UPU S10 Barcode Range Setup</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:#0f52ba; margin-top:0;'>⚙️ UPU S10 Barcode Range Setup</h4>", unsafe_allow_html=True)
         set_article = st.selectbox("Choose Target Allocation Track Key", BARCODE_POOL_KEYS)
         b_data = user_profile["barcodes"][set_article]
         
@@ -778,14 +814,12 @@ with tabs[1]:
 # --- TAB 3: PERMANENT ARCHIVE ---
 with tabs[2]:
     with st.container(border=True):
-        st.markdown("<h4 style='color:#9c0000; margin-top:0;'>📇 Permanent Generated Labels Registry</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:#0f52ba; margin-top:0;'>📇 Permanent Generated Labels Registry</h4>", unsafe_allow_html=True)
         archive = user_profile.get("generated_labels", [])
         if not archive: st.info("No labels generated yet.")
         else:
             for idx, item in enumerate(reversed(archive)):
                 real_idx = len(archive) - 1 - idx
-                
-                # --- NEW FEATURE: TRACK BUTTON ADDED HERE ---
                 row_cols = st.columns([0.4, 0.2, 0.2, 0.2])
                 with row_cols[0]:
                     st.write(f"**Barcode:** `{item['tracking']}` | **Type:** {item['article']}")
@@ -813,7 +847,7 @@ with tabs[2]:
                             font-size: 14px;
                             font-family: 'Source Sans Pro', sans-serif;
                             transition: border-color 0.2s, color 0.2s;
-                        " onmouseover="this.style.borderColor='#9c0000'; this.style.color='#9c0000';" onmouseout="this.style.borderColor='#d5dce5'; this.style.color='#31333F';">
+                        " onmouseover="this.style.borderColor='#0f52ba'; this.style.color='#0f52ba';" onmouseout="this.style.borderColor='#d5dce5'; this.style.color='#31333F';">
                             🌐 Track
                         </a>
                     """, unsafe_allow_html=True)
@@ -848,7 +882,7 @@ with tabs[2]:
 if current_user.lower() == "admin":
     with tabs[3]:
         with st.container(border=True):
-            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>👥 Corporate Client Infrastructure Directory</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:#0f52ba; margin-top:0;'>👥 Corporate Client Infrastructure Directory</h4>", unsafe_allow_html=True)
             admin_db = load_data()
             for uid, info in list(admin_db.get("users", {}).items()):
                 if uid.lower() == "admin": continue
@@ -883,7 +917,7 @@ if current_user.lower() == "admin":
                 
     with tabs[4]:
         with st.container(border=True):
-            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>✉️ Broadcast Message Center</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:#0f52ba; margin-top:0;'>✉️ Broadcast Message Center</h4>", unsafe_allow_html=True)
             all_users = [u for u in db.get("users", {}).keys() if u.lower() != "admin"]
             target = st.selectbox("Select Message Recipient", ["All Users"] + all_users)
             msg_text = st.text_area("Message Content")
@@ -935,7 +969,7 @@ if current_user.lower() == "admin":
                                 
     with tabs[5]:
         with st.container(border=True):
-            st.markdown("<h4 style='color:#9c0000; margin-top:0;'>📢 Custom Advertisements & Popups</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:#0f52ba; margin-top:0;'>📢 Custom Advertisements & Popups</h4>", unsafe_allow_html=True)
             st.info("Upload up to 5 images. These will pop up for every user upon their first login.")
             
             ads = db.get("advertisements", [])
